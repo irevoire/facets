@@ -36,7 +36,7 @@ impl Node {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Key {
     bytes: Vec<u8>,
 }
@@ -77,12 +77,57 @@ impl fmt::Debug for Key {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum Query {
+    Not(Box<Query>),
+    Equal(Key),
+    GreaterThan(Key),
+    LesserThan(Key),
+}
+
 impl Facet {
     /// Initialize a new facet btree on ram
     pub fn on_ram() -> Self {
         Self {
             order: 8,
             btree: Node::default(),
+        }
+    }
+
+    /// Process a query and return all the matching identifiers.
+    pub fn query(&self, query: &Query) -> RoaringBitmap {
+        match query {
+            Query::Not(query) => self.btree.sum.clone() - self.query(query),
+            Query::Equal(key) => {
+                let mut explore = vec![&self.btree];
+
+                while let Some(node) = explore.pop() {
+                    for (idx, k) in node.keys.iter().enumerate() {
+                        if key == k {
+                            return node.values[idx].clone();
+                        } else if k > key {
+                            if let Some(child) = node.children.get(idx) {
+                                explore.push(child);
+                                break;
+                            } else {
+                                // we're on a leaf (or there is a corruption)
+                                // and won't find the value
+                                return RoaringBitmap::new();
+                            }
+                        }
+                    }
+
+                    // if we reach this point it means our key is > to all the
+                    // key in the node
+                    if explore.is_empty() && !node.children.is_empty() {
+                        explore.push(node.children.last().unwrap());
+                    }
+                }
+
+                RoaringBitmap::new()
+            }
+            Query::GreaterThan(key) => todo!(),
+            Query::LesserThan(key) => todo!(),
         }
     }
 
@@ -439,5 +484,34 @@ mod test {
         f.btree.values[0].insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because key [0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#) contains the following values RoaringBitmap<[1234]> that are not contained in the sum of the node");
+    }
+
+    #[test]
+    fn query_equal() {
+        let f = craft_simple_facet();
+
+        // A value smaller than everything in the btree
+        let r = f.query(&Query::Equal(1.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        // A value bigger than everything in the btree
+        let r = f.query(&Query::Equal(350.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        // An exact match on the root
+        let r = f.query(&Query::Equal(35.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[3]>");
+
+        // An exact match on a random value
+        let r = f.query(&Query::Equal(45.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[6]>");
+
+        // An exact match on a leaf with multiple values
+        let r = f.query(&Query::Equal(20.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1]>");
+
+        // A missmatch on a value in the middle of the tree
+        let r = f.query(&Query::Equal(42.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
     }
 }
