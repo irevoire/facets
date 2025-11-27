@@ -82,7 +82,7 @@ pub enum Query {
     Not(Box<Query>),
     Equal(Key),
     GreaterThan(Key),
-    LesserThan(Key),
+    LessThan(Key),
 }
 
 impl Facet {
@@ -172,7 +172,61 @@ impl Facet {
 
                 ret
             }
-            Query::LesserThan(key) => todo!(),
+            Query::LessThan(key) => {
+                let mut explore = vec![&self.btree];
+                let mut ret = RoaringBitmap::new();
+
+                while let Some(node) = explore.pop() {
+                    for (idx, k) in node.keys.iter().enumerate() {
+                        if key == k {
+                            // If we find an exact match we retrieve everything
+                            // before the match and return immediately.
+                            for v in node.values.iter().take(idx) {
+                                ret |= v;
+                            }
+                            for c in node.children.iter().take(idx + 1) {
+                                ret |= &c.sum;
+                            }
+                            return ret;
+                        } else if k > key {
+                            // When the match is not exact we still add
+                            // everything before the current key but still
+                            // have to deep dive in the btree.
+                            for v in node.values.iter().take(idx) {
+                                ret |= v;
+                            }
+                            for c in node.children.iter().take(idx) {
+                                ret |= &c.sum;
+                            }
+                            if let Some(child) = node.children.get(idx) {
+                                explore.push(child);
+                                break;
+                            } else {
+                                // we're on a leaf (or there is a corruption)
+                                // and won't find anything else
+                                return ret;
+                            }
+                        }
+                    }
+
+                    // if we reach this point it means our key is > to all the
+                    // key in the node, we must dive in the btree.
+                    if explore.is_empty() {
+                        for v in node.values.iter() {
+                            ret |= v;
+                        }
+                        // we need to skip the last one
+                        for c in node.children.iter().rev().skip(1) {
+                            ret |= &c.sum;
+                        }
+                        if !node.children.is_empty() {
+                            explore.push(node.children.last().unwrap());
+                        }
+                    }
+                }
+
+                ret
+            }
         }
     }
 
@@ -591,5 +645,38 @@ mod test {
         // A missmatch on a value in the middle of the tree
         let r = f.query(&Query::GreaterThan(42.into()));
         insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 6]>");
+    }
+
+    #[test]
+    fn query_less_than() {
+        let f = craft_simple_facet();
+
+        // A value smaller than everything in the btree
+        let r = f.query(&Query::LessThan(1.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        // A value bigger than everything in the btree
+        let r = f.query(&Query::LessThan(350.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+
+        // An exact match on the root
+        let r = f.query(&Query::LessThan(35.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 4, 7, 8]>");
+
+        // An exact match on a random value
+        let r = f.query(&Query::LessThan(45.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 3, 4, 5, 7, 8]>");
+
+        // An exact match on a leaf
+        let r = f.query(&Query::LessThan(41.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 3, 4, 7, 8]>");
+
+        // An exact match on a leaf with multiple values
+        let r = f.query(&Query::LessThan(20.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[7]>");
+
+        // A missmatch on a value in the middle of the tree
+        let r = f.query(&Query::LessThan(42.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 3, 4, 5, 7, 8]>");
     }
 }
