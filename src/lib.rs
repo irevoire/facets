@@ -30,6 +30,7 @@ pub struct Node {
     children: Vec<Node>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExplorationStep {
     /// Returned if we find a key matching exactly the query.
     /// Contains the index of the key.
@@ -45,50 +46,47 @@ pub enum ExplorationStep {
 }
 
 impl Node {
+    #[inline]
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty()
+    }
+
+    #[inline]
+    pub fn next_step_toward(&self, key: &Key) -> ExplorationStep {
+        for (idx, k) in self.keys.iter().enumerate() {
+            if key == k {
+                return ExplorationStep::FinalExact { key_idx: idx };
+            } else if k > key {
+                if self.children.is_empty() {
+                    // we're on a leaf and won't find the value
+                    return ExplorationStep::FinalMiss { key_idx: idx };
+                } else {
+                    return ExplorationStep::Dive { child_idx: idx };
+                }
+            }
+        }
+
+        // if we reach this point it means our key is > to all the
+        // key in the node
+        if !self.children.is_empty() {
+            ExplorationStep::Dive {
+                child_idx: self.children.len() - 1,
+            }
+        } else {
+            ExplorationStep::FinalMiss {
+                key_idx: self.keys.len(),
+            }
+        }
     }
 
     pub fn explore_toward(&self, key: &Key, mut hook: impl FnMut(&Self, ExplorationStep)) {
         let mut explore = vec![self];
 
         while let Some(node) = explore.pop() {
-            for (idx, k) in node.keys.iter().enumerate() {
-                if key == k {
-                    hook(node, ExplorationStep::FinalExact { key_idx: idx });
-                    return;
-                } else if k > key {
-                    if let Some(child) = node.children.get(idx) {
-                        hook(node, ExplorationStep::Dive { child_idx: idx });
-                        explore.push(child);
-                        break;
-                    } else {
-                        // we're on a leaf and won't find the value
-                        hook(node, ExplorationStep::FinalMiss { key_idx: idx });
-                        return;
-                    }
-                }
-            }
-
-            // if we reach this point it means our key is > to all the
-            // key in the node
-            if explore.is_empty() {
-                if !node.children.is_empty() {
-                    hook(
-                        node,
-                        ExplorationStep::Dive {
-                            child_idx: node.children.len() - 1,
-                        },
-                    );
-                    explore.push(node.children.last().unwrap());
-                } else {
-                    hook(
-                        node,
-                        ExplorationStep::FinalMiss {
-                            key_idx: node.keys.len(),
-                        },
-                    );
-                }
+            let step = node.next_step_toward(key);
+            hook(node, step);
+            if let ExplorationStep::Dive { child_idx } = step {
+                explore.push(&node.children[child_idx]);
             }
         }
     }
