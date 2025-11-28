@@ -137,11 +137,21 @@ impl fmt::Debug for Key {
 
 #[derive(Debug, Clone)]
 pub enum Query {
+    /// Return all the ids that are NOT returned by the inner query.
     Not(Box<Query>),
+    /// Return all the ids returned by any of the inner requests.
+    Or(Vec<Query>),
+    /// Return the intersection of the ids returned by all requests.
+    And(Vec<Query>),
+    /// Return the ids matching exactly the specified key.
     Equal(Key),
+    /// Return the ids greater than the specified key.
     GreaterThan(Key),
+    /// Return the ids greater than or equal to the specified key.
     GreaterThanOrEqual(Key),
+    /// Return the ids less than the specified key.
     LessThan(Key),
+    /// Return the ids less than or equal to the specified key.
     LessThanOrEqual(Key),
 }
 
@@ -158,6 +168,32 @@ impl Facet {
     pub fn query(&self, query: &Query) -> RoaringBitmap {
         match query {
             Query::Not(query) => self.btree.sum.clone() - self.query(query),
+            Query::Or(query) => {
+                let maximum_values = self.btree.sum.len();
+
+                let mut acc = RoaringBitmap::new();
+                for query in query {
+                    if acc.len() == maximum_values {
+                        break;
+                    }
+                    acc |= self.query(query);
+                }
+                acc
+            }
+            Query::And(query) => {
+                let mut acc = RoaringBitmap::new();
+                let mut query = query.iter();
+                if let Some(query) = query.next() {
+                    acc |= self.query(query);
+                }
+                for query in query {
+                    if acc.is_empty() {
+                        break;
+                    }
+                    acc &= self.query(query);
+                }
+                acc
+            }
             Query::Equal(key) => {
                 let mut acc = RoaringBitmap::new();
                 self.btree.explore_toward(key, |node, step| {
@@ -615,6 +651,87 @@ mod test {
         f.btree.values[0].insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because key [0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#) contains the following values RoaringBitmap<[1234]> that are not contained in the sum of the node");
+    }
+
+    #[test]
+    fn query_not() {
+        let f = craft_simple_facet();
+
+        // A value smaller than everything in the btree
+        let r = f.query(&Query::Not(Box::new(Query::Equal(1.into()))));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+
+        // A value bigger than everything in the btree
+        let r = f.query(&Query::Not(Box::new(Query::Equal(350.into()))));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+
+        // An exact match on the root
+        let r = f.query(&Query::Not(Box::new(Query::Equal(35.into()))));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 4, 5, 6, 7, 8]>");
+
+        // An exact match on a random value
+        let r = f.query(&Query::Not(Box::new(Query::Equal(45.into()))));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 7, 8]>");
+
+        // An exact match on a leaf with multiple values
+        let r = f.query(&Query::Not(Box::new(Query::Equal(20.into()))));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 2, 3, 4, 5, 6, 7, 8]>");
+
+        // A missmatch on a value in the middle of the tree
+        let r = f.query(&Query::Not(Box::new(Query::Equal(42.into()))));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+    }
+
+    #[test]
+    fn query_or() {
+        let f = craft_simple_facet();
+
+        let r = f.query(&Query::Or(vec![]));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        let r = f.query(&Query::Or(vec![
+            Query::LessThan(35.into()),
+            Query::GreaterThan(35.into()),
+        ]));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 4, 5, 6, 7, 8]>");
+
+        let r = f.query(&Query::Or(vec![
+            Query::LessThanOrEqual(35.into()),
+            Query::GreaterThanOrEqual(35.into()),
+        ]));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+
+        let r = f.query(&Query::Or(vec![
+            Query::LessThan(35.into()),
+            Query::LessThan(23.into()),
+        ]));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 4, 7, 8]>");
+    }
+
+    #[test]
+    fn query_and() {
+        let f = craft_simple_facet();
+
+        let r = f.query(&Query::And(vec![]));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        let r = f.query(&Query::And(vec![
+            Query::LessThan(35.into()),
+            Query::GreaterThan(35.into()),
+        ]));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        let r = f.query(&Query::And(vec![
+            Query::LessThanOrEqual(35.into()),
+            Query::GreaterThanOrEqual(35.into()),
+        ]));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[3]>");
+
+        let r = f.query(&Query::And(vec![
+            Query::LessThan(35.into()),
+            Query::LessThan(23.into()),
+        ]));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 4, 7, 8]>");
     }
 
     #[test]
