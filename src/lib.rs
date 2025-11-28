@@ -30,9 +30,67 @@ pub struct Node {
     children: Vec<Node>,
 }
 
+pub enum ExplorationStep {
+    /// Returned if we find a key matching exactly the query.
+    /// Contains the index of the key.
+    /// It's the final step. The closure won't be called again.
+    FinalExact { key_idx: usize },
+    /// Returned if we don't contain any key matching the query.
+    /// Contains the position where the key should be inserted.
+    /// It's the final step. The closure won't be called again.
+    FinalMiss { key_idx: usize },
+    /// Returned if we may contains the key but need to dive in the structure.
+    /// Return the index of the child we're going to explore next.
+    Dive { child_idx: usize },
+}
+
 impl Node {
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty()
+    }
+
+    pub fn explore_toward(&self, key: &Key, mut hook: impl FnMut(&Self, ExplorationStep)) {
+        let mut explore = vec![self];
+
+        while let Some(node) = explore.pop() {
+            for (idx, k) in node.keys.iter().enumerate() {
+                if key == k {
+                    hook(node, ExplorationStep::FinalExact { key_idx: idx });
+                    return;
+                } else if k > key {
+                    if let Some(child) = node.children.get(idx) {
+                        hook(node, ExplorationStep::Dive { child_idx: idx });
+                        explore.push(child);
+                        break;
+                    } else {
+                        // we're on a leaf and won't find the value
+                        hook(node, ExplorationStep::FinalMiss { key_idx: idx });
+                        return;
+                    }
+                }
+            }
+
+            // if we reach this point it means our key is > to all the
+            // key in the node
+            if explore.is_empty() {
+                if !node.children.is_empty() {
+                    hook(
+                        node,
+                        ExplorationStep::Dive {
+                            child_idx: node.children.len() - 1,
+                        },
+                    );
+                    explore.push(node.children.last().unwrap());
+                } else {
+                    hook(
+                        node,
+                        ExplorationStep::FinalMiss {
+                            key_idx: node.keys.len(),
+                        },
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -99,133 +157,59 @@ impl Facet {
         match query {
             Query::Not(query) => self.btree.sum.clone() - self.query(query),
             Query::Equal(key) => {
-                let mut explore = vec![&self.btree];
-
-                while let Some(node) = explore.pop() {
-                    for (idx, k) in node.keys.iter().enumerate() {
-                        if key == k {
-                            return node.values[idx].clone();
-                        } else if k > key {
-                            if let Some(child) = node.children.get(idx) {
-                                explore.push(child);
-                                break;
-                            } else {
-                                // we're on a leaf (or there is a corruption)
-                                // and won't find the value
-                                return RoaringBitmap::new();
-                            }
-                        }
+                let mut acc = RoaringBitmap::new();
+                self.btree.explore_toward(key, |node, step| {
+                    if let ExplorationStep::FinalExact { key_idx } = step {
+                        acc = node.values[key_idx].clone()
                     }
-
-                    // if we reach this point it means our key is > to all the
-                    // key in the node
-                    if explore.is_empty() && !node.children.is_empty() {
-                        explore.push(node.children.last().unwrap());
-                    }
-                }
-
-                RoaringBitmap::new()
+                });
+                acc
             }
             Query::GreaterThan(key) => {
-                let mut explore = vec![&self.btree];
-                let mut ret = RoaringBitmap::new();
-
-                while let Some(node) = explore.pop() {
-                    for (idx, k) in node.keys.iter().enumerate() {
-                        if key == k {
-                            // If we find an exact match we retrieve everything
-                            // after the match and return immediately.
-                            for v in node.values.iter().skip(idx + 1) {
-                                ret |= v;
-                            }
-                            for c in node.children.iter().skip(idx + 1) {
-                                ret |= &c.sum;
-                            }
-                            return ret;
-                        } else if k > key {
-                            // When the match is not exact we still add
-                            // everything after the current key but still
-                            // have to deep dive in the btree.
-                            for v in node.values.iter().skip(idx) {
-                                ret |= v;
-                            }
-                            for c in node.children.iter().skip(idx + 1) {
-                                ret |= &c.sum;
-                            }
-                            if let Some(child) = node.children.get(idx) {
-                                explore.push(child);
-                                break;
-                            } else {
-                                // we're on a leaf (or there is a corruption)
-                                // and won't find anything else
-                                return ret;
-                            }
+                let mut acc = RoaringBitmap::new();
+                self.btree.explore_toward(key, |node, step| match step {
+                    ExplorationStep::FinalExact { key_idx } => {
+                        for bitmap in node.values.iter().skip(key_idx + 1) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().skip(key_idx + 1) {
+                            acc |= &child.sum;
                         }
                     }
-
-                    // if we reach this point it means our key is > to all the
-                    // key in the node, we must dive in the btree.
-                    if explore.is_empty() && !node.children.is_empty() {
-                        explore.push(node.children.last().unwrap());
+                    ExplorationStep::FinalMiss { key_idx: idx }
+                    | ExplorationStep::Dive { child_idx: idx } => {
+                        for bitmap in node.values.iter().skip(idx) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().skip(idx + 1) {
+                            acc |= &child.sum;
+                        }
                     }
-                }
-
-                ret
+                });
+                acc
             }
             Query::LessThan(key) => {
-                let mut explore = vec![&self.btree];
-                let mut ret = RoaringBitmap::new();
-
-                while let Some(node) = explore.pop() {
-                    for (idx, k) in node.keys.iter().enumerate() {
-                        if key == k {
-                            // If we find an exact match we retrieve everything
-                            // before the match and return immediately.
-                            for v in node.values.iter().take(idx) {
-                                ret |= v;
-                            }
-                            for c in node.children.iter().take(idx + 1) {
-                                ret |= &c.sum;
-                            }
-                            return ret;
-                        } else if k > key {
-                            // When the match is not exact we still add
-                            // everything before the current key but still
-                            // have to deep dive in the btree.
-                            for v in node.values.iter().take(idx) {
-                                ret |= v;
-                            }
-                            for c in node.children.iter().take(idx) {
-                                ret |= &c.sum;
-                            }
-                            if let Some(child) = node.children.get(idx) {
-                                explore.push(child);
-                                break;
-                            } else {
-                                // we're on a leaf (or there is a corruption)
-                                // and won't find anything else
-                                return ret;
-                            }
+                let mut acc = RoaringBitmap::new();
+                self.btree.explore_toward(key, |node, step| match step {
+                    ExplorationStep::FinalExact { key_idx } => {
+                        for bitmap in node.values.iter().take(key_idx) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().take(key_idx + 1) {
+                            acc |= &child.sum;
                         }
                     }
-
-                    // if we reach this point it means our key is > to all the
-                    // key in the node, we must dive in the btree.
-                    if explore.is_empty() {
-                        for v in node.values.iter() {
-                            ret |= v;
+                    ExplorationStep::FinalMiss { key_idx: idx }
+                    | ExplorationStep::Dive { child_idx: idx } => {
+                        for bitmap in node.values.iter().take(idx) {
+                            acc |= bitmap;
                         }
-                        // we need to skip the last one
-                        for c in node.children.iter().rev().skip(1) {
-                            ret |= &c.sum;
-                        }
-                        if !node.children.is_empty() {
-                            explore.push(node.children.last().unwrap());
+                        for child in node.children.iter().take(idx) {
+                            acc |= &child.sum;
                         }
                     }
-                }
-
-                ret
+                });
+                acc
             }
         }
     }
