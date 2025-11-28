@@ -1,4 +1,5 @@
 use core::fmt;
+use std::ops::Bound;
 
 use roaring::RoaringBitmap;
 
@@ -49,6 +50,52 @@ impl Node {
     #[inline]
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty()
+    }
+
+    /// Accumulate all ids before the specified index.
+    /// The bound of the index is used to indicate if the key at the index
+    /// should be included or not.
+    pub fn accumulate_ids_before(&self, idx: Bound<usize>, acc: &mut RoaringBitmap) {
+        let (child_idx, key_idx) = match idx {
+            // special case, we can add everything contained in our sum and
+            // early exit
+            Bound::Unbounded => {
+                *acc |= &self.sum;
+                return;
+            }
+            Bound::Included(idx) => (idx, idx),
+            Bound::Excluded(idx) => (idx, idx.saturating_sub(1)),
+        };
+
+        for bitmap in self.values.iter().take(key_idx) {
+            *acc |= bitmap;
+        }
+        for child in self.children.iter().take(child_idx) {
+            *acc |= &child.sum;
+        }
+    }
+
+    /// Accumulate all ids before the specified index.
+    /// The bound of the index is used to indicate if the key at the index
+    /// should be included or not.
+    pub fn accumulate_ids_after(&self, idx: Bound<usize>, acc: &mut RoaringBitmap) {
+        let (child_idx, key_idx) = match idx {
+            // special case, we can add everything contained in our sum and
+            // early exit
+            Bound::Unbounded => {
+                *acc |= &self.sum;
+                return;
+            }
+            Bound::Included(idx) => (idx + 1, idx),
+            Bound::Excluded(idx) => (idx + 1, idx + 1),
+        };
+
+        for bitmap in self.values.iter().skip(key_idx) {
+            *acc |= bitmap;
+        }
+        for child in self.children.iter().skip(child_idx) {
+            *acc |= &child.sum;
+        }
     }
 
     #[inline]
@@ -211,21 +258,11 @@ impl Facet {
                 let mut acc = RoaringBitmap::new();
                 self.btree.explore_toward(key, |node, step| match step {
                     ExplorationStep::FinalExact { key_idx } => {
-                        for bitmap in node.values.iter().skip(key_idx + 1) {
-                            acc |= bitmap;
-                        }
-                        for child in node.children.iter().skip(key_idx + 1) {
-                            acc |= &child.sum;
-                        }
+                        node.accumulate_ids_after(Bound::Excluded(key_idx), &mut acc);
                     }
                     ExplorationStep::FinalMiss { key_idx: idx }
                     | ExplorationStep::Dive { child_idx: idx } => {
-                        for bitmap in node.values.iter().skip(idx) {
-                            acc |= bitmap;
-                        }
-                        for child in node.children.iter().skip(idx + 1) {
-                            acc |= &child.sum;
-                        }
+                        node.accumulate_ids_after(Bound::Included(idx), &mut acc);
                     }
                 });
                 acc
@@ -234,21 +271,11 @@ impl Facet {
                 let mut acc = RoaringBitmap::new();
                 self.btree.explore_toward(key, |node, step| match step {
                     ExplorationStep::FinalExact { key_idx } => {
-                        for bitmap in node.values.iter().skip(key_idx) {
-                            acc |= bitmap;
-                        }
-                        for child in node.children.iter().skip(key_idx + 1) {
-                            acc |= &child.sum;
-                        }
+                        node.accumulate_ids_after(Bound::Included(key_idx), &mut acc);
                     }
                     ExplorationStep::FinalMiss { key_idx: idx }
                     | ExplorationStep::Dive { child_idx: idx } => {
-                        for bitmap in node.values.iter().skip(idx) {
-                            acc |= bitmap;
-                        }
-                        for child in node.children.iter().skip(idx + 1) {
-                            acc |= &child.sum;
-                        }
+                        node.accumulate_ids_after(Bound::Included(idx), &mut acc);
                     }
                 });
                 acc
@@ -257,21 +284,11 @@ impl Facet {
                 let mut acc = RoaringBitmap::new();
                 self.btree.explore_toward(key, |node, step| match step {
                     ExplorationStep::FinalExact { key_idx } => {
-                        for bitmap in node.values.iter().take(key_idx) {
-                            acc |= bitmap;
-                        }
-                        for child in node.children.iter().take(key_idx + 1) {
-                            acc |= &child.sum;
-                        }
+                        node.accumulate_ids_before(Bound::Excluded(key_idx + 1), &mut acc);
                     }
                     ExplorationStep::FinalMiss { key_idx: idx }
                     | ExplorationStep::Dive { child_idx: idx } => {
-                        for bitmap in node.values.iter().take(idx) {
-                            acc |= bitmap;
-                        }
-                        for child in node.children.iter().take(idx) {
-                            acc |= &child.sum;
-                        }
+                        node.accumulate_ids_before(Bound::Included(idx), &mut acc);
                     }
                 });
                 acc
@@ -280,21 +297,11 @@ impl Facet {
                 let mut acc = RoaringBitmap::new();
                 self.btree.explore_toward(key, |node, step| match step {
                     ExplorationStep::FinalExact { key_idx } => {
-                        for bitmap in node.values.iter().take(key_idx + 1) {
-                            acc |= bitmap;
-                        }
-                        for child in node.children.iter().take(key_idx + 1) {
-                            acc |= &child.sum;
-                        }
+                        node.accumulate_ids_before(Bound::Included(key_idx + 1), &mut acc);
                     }
                     ExplorationStep::FinalMiss { key_idx: idx }
                     | ExplorationStep::Dive { child_idx: idx } => {
-                        for bitmap in node.values.iter().take(idx) {
-                            acc |= bitmap;
-                        }
-                        for child in node.children.iter().take(idx) {
-                            acc |= &child.sum;
-                        }
+                        node.accumulate_ids_before(Bound::Included(idx), &mut acc);
                     }
                 });
                 acc
