@@ -140,7 +140,9 @@ pub enum Query {
     Not(Box<Query>),
     Equal(Key),
     GreaterThan(Key),
+    GreaterThanOrEqual(Key),
     LessThan(Key),
+    LessThanOrEqual(Key),
 }
 
 impl Facet {
@@ -188,11 +190,57 @@ impl Facet {
                 });
                 acc
             }
+            Query::GreaterThanOrEqual(key) => {
+                let mut acc = RoaringBitmap::new();
+                self.btree.explore_toward(key, |node, step| match step {
+                    ExplorationStep::FinalExact { key_idx } => {
+                        for bitmap in node.values.iter().skip(key_idx) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().skip(key_idx + 1) {
+                            acc |= &child.sum;
+                        }
+                    }
+                    ExplorationStep::FinalMiss { key_idx: idx }
+                    | ExplorationStep::Dive { child_idx: idx } => {
+                        for bitmap in node.values.iter().skip(idx) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().skip(idx + 1) {
+                            acc |= &child.sum;
+                        }
+                    }
+                });
+                acc
+            }
             Query::LessThan(key) => {
                 let mut acc = RoaringBitmap::new();
                 self.btree.explore_toward(key, |node, step| match step {
                     ExplorationStep::FinalExact { key_idx } => {
                         for bitmap in node.values.iter().take(key_idx) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().take(key_idx + 1) {
+                            acc |= &child.sum;
+                        }
+                    }
+                    ExplorationStep::FinalMiss { key_idx: idx }
+                    | ExplorationStep::Dive { child_idx: idx } => {
+                        for bitmap in node.values.iter().take(idx) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().take(idx) {
+                            acc |= &child.sum;
+                        }
+                    }
+                });
+                acc
+            }
+            Query::LessThanOrEqual(key) => {
+                let mut acc = RoaringBitmap::new();
+                self.btree.explore_toward(key, |node, step| match step {
+                    ExplorationStep::FinalExact { key_idx } => {
+                        for bitmap in node.values.iter().take(key_idx + 1) {
                             acc |= bitmap;
                         }
                         for child in node.children.iter().take(key_idx + 1) {
@@ -632,6 +680,39 @@ mod test {
     }
 
     #[test]
+    fn query_greater_than_or_equal() {
+        let f = craft_simple_facet();
+
+        // A value smaller than everything in the btree
+        let r = f.query(&Query::GreaterThanOrEqual(1.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+
+        // A value bigger than everything in the btree
+        let r = f.query(&Query::GreaterThanOrEqual(350.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        // An exact match on the root
+        let r = f.query(&Query::GreaterThanOrEqual(35.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 3, 5, 6]>");
+
+        // An exact match on a random value
+        let r = f.query(&Query::GreaterThanOrEqual(45.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 6]>");
+
+        // An exact match on a leaf
+        let r = f.query(&Query::GreaterThanOrEqual(41.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 5, 6]>");
+
+        // An exact match on a leaf with multiple values
+        let r = f.query(&Query::GreaterThanOrEqual(20.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 8]>");
+
+        // A missmatch on a value in the middle of the tree
+        let r = f.query(&Query::GreaterThanOrEqual(42.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 6]>");
+    }
+
+    #[test]
     fn query_less_than() {
         let f = craft_simple_facet();
 
@@ -661,6 +742,39 @@ mod test {
 
         // A missmatch on a value in the middle of the tree
         let r = f.query(&Query::LessThan(42.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 3, 4, 5, 7, 8]>");
+    }
+
+    #[test]
+    fn query_less_than_or_equal() {
+        let f = craft_simple_facet();
+
+        // A value smaller than everything in the btree
+        let r = f.query(&Query::LessThanOrEqual(1.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        // A value bigger than everything in the btree
+        let r = f.query(&Query::LessThanOrEqual(350.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+
+        // An exact match on the root
+        let r = f.query(&Query::LessThanOrEqual(35.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 3, 4, 7, 8]>");
+
+        // An exact match on a random value
+        let r = f.query(&Query::LessThanOrEqual(45.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 3, 4, 5, 6, 7, 8]>");
+
+        // An exact match on a leaf
+        let r = f.query(&Query::LessThanOrEqual(41.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 3, 4, 5, 7, 8]>");
+
+        // An exact match on a leaf with multiple values
+        let r = f.query(&Query::LessThanOrEqual(20.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 7]>");
+
+        // A missmatch on a value in the middle of the tree
+        let r = f.query(&Query::LessThanOrEqual(42.into()));
         insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 3, 4, 5, 7, 8]>");
     }
 }
