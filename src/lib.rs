@@ -98,6 +98,7 @@ impl Node {
         }
     }
 
+    /// Return what action we should take to move toward the specified key.
     #[inline]
     pub fn next_step_toward(&self, key: &Key) -> ExplorationStep {
         for (idx, k) in self.keys.iter().enumerate() {
@@ -126,6 +127,8 @@ impl Node {
         }
     }
 
+    /// Explore the btree from the root to the specified key calling your hook
+    /// on every step we take in the tree.
     pub fn explore_toward(&self, key: &Key, mut hook: impl FnMut(&Self, ExplorationStep)) {
         let mut explore = vec![self];
 
@@ -553,7 +556,7 @@ mod test {
                             },
                             Node {
                                 sum: RoaringBitmap::from_iter([4, 8]),
-                                keys: vec![4.into(), 8.into()],
+                                keys: vec![24.into(), 25.into()],
                                 values: vec![
                                     RoaringBitmap::from_iter([8]),
                                     RoaringBitmap::from_iter([4]),
@@ -850,6 +853,8 @@ mod test {
         // An exact match on a leaf with multiple values
         let r = f.query(&Query::GreaterThanOrEqual(20.into()));
         insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 8]>");
+        let r = f.query(&Query::GreaterThanOrEqual(24.into()));
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 3, 4, 5, 6, 8]>");
 
         // A missmatch on a value in the middle of the tree
         let r = f.query(&Query::GreaterThanOrEqual(42.into()));
