@@ -761,7 +761,7 @@ mod test {
             Query::LessThan(35.into()),
             Query::LessThan(23.into()),
         ]));
-        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 4, 7, 8]>");
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 7]>");
     }
 
     #[test]
