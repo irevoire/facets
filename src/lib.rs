@@ -52,25 +52,47 @@ impl Node {
         self.children.is_empty()
     }
 
-    /// Accumulate all ids before the specified index.
+    /// Accumulate all ids between the specified indexes.
     /// The bound of the index is used to indicate if the key at the index
     /// should be included or not.
-    pub fn accumulate_ids_before(&self, idx: Bound<usize>, acc: &mut RoaringBitmap) {
-        let (child_idx, key_idx) = match idx {
-            // special case, we can add everything contained in our sum and
-            // early exit
-            Bound::Unbounded => {
-                *acc |= &self.sum;
-                return;
-            }
-            Bound::Included(idx) => (idx, idx),
-            Bound::Excluded(idx) => (idx, idx.saturating_sub(1)),
+    pub fn accumulate_ids_between(
+        &self,
+        left: Bound<usize>,
+        right: Bound<usize>,
+        acc: &mut RoaringBitmap,
+    ) {
+        if left == Bound::Unbounded && right == Bound::Unbounded {
+            *acc |= &self.sum;
+            return;
+        }
+
+        let (child_skip, key_skip) = match left {
+            Bound::Unbounded => (0, 0),
+            Bound::Included(left) => (left + 1, left),
+            Bound::Excluded(left) => (left + 1, left + 1),
         };
 
-        for bitmap in self.values.iter().take(key_idx) {
+        let (child_take, key_take) = match right {
+            Bound::Unbounded => (usize::MAX, usize::MAX),
+            Bound::Included(right) => (right, right),
+            Bound::Excluded(right) => (right, right.saturating_sub(1)),
+        };
+
+        // If left and right are exactly equals and pointing to the same value
+        // we add the matching key.
+        if let Bound::Included(left) = left
+            && let Bound::Included(right) = right
+            && left == right
+        {
+            if let Some(bitmap) = self.values.get(left.saturating_sub(1)) {
+                *acc |= bitmap;
+            }
+        }
+
+        for bitmap in self.values.iter().take(key_take).skip(key_skip) {
             *acc |= bitmap;
         }
-        for child in self.children.iter().take(child_idx) {
+        for child in self.children.iter().take(child_take).skip(child_skip) {
             *acc |= &child.sum;
         }
     }
@@ -78,24 +100,15 @@ impl Node {
     /// Accumulate all ids before the specified index.
     /// The bound of the index is used to indicate if the key at the index
     /// should be included or not.
-    pub fn accumulate_ids_after(&self, idx: Bound<usize>, acc: &mut RoaringBitmap) {
-        let (child_idx, key_idx) = match idx {
-            // special case, we can add everything contained in our sum and
-            // early exit
-            Bound::Unbounded => {
-                *acc |= &self.sum;
-                return;
-            }
-            Bound::Included(idx) => (idx + 1, idx),
-            Bound::Excluded(idx) => (idx + 1, idx + 1),
-        };
+    pub fn accumulate_ids_before(&self, idx: Bound<usize>, acc: &mut RoaringBitmap) {
+        self.accumulate_ids_between(Bound::Unbounded, idx, acc);
+    }
 
-        for bitmap in self.values.iter().skip(key_idx) {
-            *acc |= bitmap;
-        }
-        for child in self.children.iter().skip(child_idx) {
-            *acc |= &child.sum;
-        }
+    /// Accumulate all ids before the specified index.
+    /// The bound of the index is used to indicate if the key at the index
+    /// should be included or not.
+    pub fn accumulate_ids_after(&self, idx: Bound<usize>, acc: &mut RoaringBitmap) {
+        self.accumulate_ids_between(idx, Bound::Unbounded, acc);
     }
 
     /// Return what action we should take to move toward the specified key.
@@ -205,6 +218,8 @@ pub enum Query {
     LessThan(Key),
     /// Return the ids less than or equal to the specified key.
     LessThanOrEqual(Key),
+    /// Return the ids contained in the range.
+    Range { start: Bound<Key>, end: Bound<Key> },
 }
 
 impl Facet {
@@ -307,6 +322,173 @@ impl Facet {
                         node.accumulate_ids_before(Bound::Included(idx), &mut acc);
                     }
                 });
+                acc
+            }
+            Query::Range { start, end } => {
+                // transform and sanitize:
+                // - If the range can be simplified to something simpler like a
+                //   Equal, LowerThan or GreaterThan we skip the range query
+                //   and instead process the simpler query.
+                // - After the match we should be sure to have a start < end
+                let (left, right) = match (start, end) {
+                    (Bound::Unbounded, Bound::Unbounded) => return self.query(&Query::All),
+                    (Bound::Included(key), Bound::Unbounded) => {
+                        return self.query(&Query::GreaterThanOrEqual(key.clone()));
+                    }
+                    (Bound::Excluded(key), Bound::Unbounded) => {
+                        return self.query(&Query::GreaterThan(key.clone()));
+                    }
+                    (Bound::Unbounded, Bound::Included(key)) => {
+                        return self.query(&Query::LessThanOrEqual(key.clone()));
+                    }
+                    (Bound::Unbounded, Bound::Excluded(key)) => {
+                        return self.query(&Query::LessThan(key.clone()));
+                    }
+                    (Bound::Included(start), Bound::Included(end)) if start == end => {
+                        return self.query(&Query::Equal(start.clone()));
+                    }
+                    (Bound::Included(start), Bound::Included(end)) if start > end => {
+                        return RoaringBitmap::new();
+                    }
+                    (Bound::Included(start), Bound::Excluded(end)) if start >= end => {
+                        return RoaringBitmap::new();
+                    }
+                    (
+                        Bound::Included(start) | Bound::Excluded(start),
+                        Bound::Included(end) | Bound::Excluded(end),
+                    ) => (start, end),
+                };
+                let mut acc = RoaringBitmap::new();
+                let mut explore = vec![&self.btree];
+
+                while let Some(node) = explore.pop() {
+                    let left_step = node.next_step_toward(left);
+                    let right_step = node.next_step_toward(right);
+
+                    let left = match left_step {
+                        ExplorationStep::FinalExact { key_idx } => {
+                            start.as_ref().map(|_| key_idx + 1)
+                        }
+                        ExplorationStep::FinalMiss { key_idx: idx }
+                        | ExplorationStep::Dive { child_idx: idx } => Bound::Included(idx),
+                    };
+                    let right = match right_step {
+                        ExplorationStep::FinalExact { key_idx } => end.as_ref().map(|_| key_idx),
+                        ExplorationStep::FinalMiss { key_idx: idx }
+                        | ExplorationStep::Dive { child_idx: idx } => Bound::Included(idx),
+                    };
+                    node.accumulate_ids_between(left, right, &mut acc);
+
+                    if left_step == right_step
+                        && let ExplorationStep::Dive { child_idx } = left_step
+                    {
+                        explore.push(&node.children[child_idx]);
+                        continue;
+                    }
+
+                    // If we reach this point it means the left and right
+                    // are different or are not diving anymore (in which case
+                    // their content have already been handled).
+                    // We will stop exploring the tree ourselves and instead
+                    // leave that job to the simpler greater than and less than.
+
+                    if let ExplorationStep::Dive { child_idx } = left_step {
+                        match start {
+                            // The exact code of a greater than or equal
+                            Bound::Included(key) => {
+                                node.children[child_idx].explore_toward(
+                                    key,
+                                    |node, step| match step {
+                                        ExplorationStep::FinalExact { key_idx } => {
+                                            node.accumulate_ids_after(
+                                                Bound::Included(key_idx),
+                                                &mut acc,
+                                            );
+                                        }
+                                        ExplorationStep::FinalMiss { key_idx: idx }
+                                        | ExplorationStep::Dive { child_idx: idx } => {
+                                            node.accumulate_ids_after(
+                                                Bound::Included(idx),
+                                                &mut acc,
+                                            );
+                                        }
+                                    },
+                                );
+                            }
+                            // The exact code of a greater than
+                            Bound::Excluded(key) => {
+                                node.children[child_idx].explore_toward(
+                                    key,
+                                    |node, step| match step {
+                                        ExplorationStep::FinalExact { key_idx } => {
+                                            node.accumulate_ids_after(
+                                                Bound::Excluded(key_idx),
+                                                &mut acc,
+                                            );
+                                        }
+                                        ExplorationStep::FinalMiss { key_idx: idx }
+                                        | ExplorationStep::Dive { child_idx: idx } => {
+                                            node.accumulate_ids_after(
+                                                Bound::Included(idx),
+                                                &mut acc,
+                                            );
+                                        }
+                                    },
+                                );
+                            }
+                            Bound::Unbounded => unreachable!(),
+                        };
+                    }
+                    if let ExplorationStep::Dive { child_idx } = right_step {
+                        match end {
+                            // The exact code of a less than or equal
+                            Bound::Included(key) => {
+                                node.children[child_idx].explore_toward(
+                                    key,
+                                    |node, step| match step {
+                                        ExplorationStep::FinalExact { key_idx } => {
+                                            node.accumulate_ids_before(
+                                                Bound::Included(key_idx + 1),
+                                                &mut acc,
+                                            );
+                                        }
+                                        ExplorationStep::FinalMiss { key_idx: idx }
+                                        | ExplorationStep::Dive { child_idx: idx } => {
+                                            node.accumulate_ids_before(
+                                                Bound::Included(idx),
+                                                &mut acc,
+                                            );
+                                        }
+                                    },
+                                );
+                            }
+                            // The exact code of a less than
+                            Bound::Excluded(key) => {
+                                node.children[child_idx].explore_toward(
+                                    key,
+                                    |node, step| match step {
+                                        ExplorationStep::FinalExact { key_idx } => {
+                                            node.accumulate_ids_before(
+                                                Bound::Excluded(key_idx + 1),
+                                                &mut acc,
+                                            );
+                                        }
+                                        ExplorationStep::FinalMiss { key_idx: idx }
+                                        | ExplorationStep::Dive { child_idx: idx } => {
+                                            node.accumulate_ids_before(
+                                                Bound::Included(idx),
+                                                &mut acc,
+                                            );
+                                        }
+                                    },
+                                );
+                            }
+                            Bound::Unbounded => unreachable!(),
+                        }
+                    }
+                    break;
+                }
+
                 acc
             }
         }
@@ -925,5 +1107,105 @@ mod test {
         // A missmatch on a value in the middle of the tree
         let r = f.query(&Query::LessThanOrEqual(42.into()));
         insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[1, 2, 3, 4, 5, 7, 8]>");
+    }
+
+    #[test]
+    fn query_range() {
+        let f = craft_simple_facet();
+
+        // Select everything by definition
+        let r = f.query(&Query::Range {
+            start: Bound::Unbounded,
+            end: Bound::Unbounded,
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+
+        // Inverted range
+        let r = f.query(&Query::Range {
+            start: Bound::Included(45.into()),
+            end: Bound::Included(25.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        // Empty range
+        let r = f.query(&Query::Range {
+            start: Bound::Included(35.into()),
+            end: Bound::Excluded(35.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        // A value smaller than everything in the btree
+        let r = f.query(&Query::Range {
+            start: Bound::Unbounded,
+            end: Bound::Included(1.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+        let r = f.query(&Query::Range {
+            start: Bound::Unbounded,
+            end: Bound::Excluded(1.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+        let r = f.query(&Query::Range {
+            start: Bound::Included(1.into()),
+            end: Bound::Unbounded,
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+        let r = f.query(&Query::Range {
+            start: Bound::Excluded(1.into()),
+            end: Bound::Unbounded,
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+
+        // A value bigger than everything in the btree
+        let r = f.query(&Query::Range {
+            start: Bound::Unbounded,
+            end: Bound::Included(350.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+        let r = f.query(&Query::Range {
+            start: Bound::Unbounded,
+            end: Bound::Excluded(350.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
+        let r = f.query(&Query::Range {
+            start: Bound::Included(350.into()),
+            end: Bound::Unbounded,
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+        let r = f.query(&Query::Range {
+            start: Bound::Excluded(350.into()),
+            end: Bound::Unbounded,
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        // An exact match on the root
+        let r = f.query(&Query::Range {
+            start: Bound::Included(35.into()),
+            end: Bound::Included(35.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[3]>");
+        let r = f.query(&Query::Range {
+            start: Bound::Included(35.into()),
+            end: Bound::Excluded(36.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[3]>");
+
+        let r = f.query(&Query::Range {
+            start: Bound::Included(35.into()),
+            end: Bound::Excluded(37.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[3]>");
+
+        let r = f.query(&Query::Range {
+            start: Bound::Included(24.into()),
+            end: Bound::Excluded(45.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[3, 4, 5, 8]>");
+
+        let r = f.query(&Query::Range {
+            start: Bound::Included(24.into()),
+            end: Bound::Included(45.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[3, 4, 5, 6, 8]>");
     }
 }
