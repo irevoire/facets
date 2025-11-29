@@ -350,9 +350,10 @@ impl Facet {
                     (Bound::Included(start), Bound::Included(end)) if start > end => {
                         return RoaringBitmap::new();
                     }
-                    (Bound::Included(start), Bound::Excluded(end)) if start >= end => {
-                        return RoaringBitmap::new();
-                    }
+                    (
+                        Bound::Included(start) | Bound::Excluded(start),
+                        Bound::Included(end) | Bound::Excluded(end),
+                    ) if start >= end => return RoaringBitmap::new(),
                     (
                         Bound::Included(start) | Bound::Excluded(start),
                         Bound::Included(end) | Bound::Excluded(end),
@@ -1207,5 +1208,37 @@ mod test {
             end: Bound::Included(45.into()),
         });
         insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[3, 4, 5, 6, 8]>");
+
+        // bugs found by proptest
+        let r = f.query(&Query::Range {
+            start: Bound::Excluded(0.into()),
+            end: Bound::Excluded(0.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+
+        let r = f.query(&Query::Range {
+            start: Bound::Excluded(36.into()),
+            end: Bound::Excluded(37.into()),
+        });
+        insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
+    }
+
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn range_works(greater_than in 0_usize..=75, less_than in 0_usize..=75) {
+            let f = craft_simple_facet();
+            let greater_than_ret = f.query(&Query::GreaterThan(greater_than.into()));
+            let less_than_ret = f.query(&Query::LessThan(less_than.into()));
+            let expected_range = greater_than_ret & less_than_ret;
+
+            let range_ret = f.query(&Query::Range {
+                start: Bound::Excluded(greater_than.into()),
+                end: Bound::Excluded(less_than.into()),
+            });
+
+            prop_assert_eq!(expected_range, range_ret);
+
+        }
     }
 }
