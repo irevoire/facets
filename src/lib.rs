@@ -186,128 +186,151 @@ impl Node {
                     let left_step = node.next_step_toward(left);
                     let right_step = node.next_step_toward(right);
 
-                    let left = match left_step {
-                        ExplorationStep::FinalExact { key_idx } => {
-                            start.as_ref().map(|_| key_idx + 1)
+                    match (left_step, right_step) {
+                        // ==== FINAL CASES FIRST
+                        (
+                            ExplorationStep::FinalExact { key_idx: left },
+                            ExplorationStep::FinalExact { key_idx: right },
+                        ) => {
+                            let include_right = matches!(end, Bound::Included(_)) as usize;
+                            let exclude_left = matches!(start, Bound::Excluded(_)) as usize;
+                            for bitmap in node
+                                .values
+                                .iter()
+                                .take(right + include_right)
+                                .skip(left + exclude_left)
+                            {
+                                acc |= bitmap;
+                            }
+                            for child in node.children.iter().take(right + 1).skip(left + 1) {
+                                acc |= &child.sum;
+                            }
+                            return acc;
                         }
-                        ExplorationStep::FinalMiss { key_idx: idx }
-                        | ExplorationStep::Dive { child_idx: idx } => Bound::Included(idx),
-                    };
-                    let right = match right_step {
-                        ExplorationStep::FinalExact { key_idx } => end.as_ref().map(|_| key_idx),
-                        ExplorationStep::FinalMiss { key_idx: idx }
-                        | ExplorationStep::Dive { child_idx: idx } => Bound::Included(idx),
-                    };
-                    node.accumulate_ids_between(left, right, &mut acc);
+                        (
+                            ExplorationStep::FinalExact { key_idx: left },
+                            ExplorationStep::FinalMiss { key_idx: right },
+                        ) => {
+                            let exclude_left = matches!(start, Bound::Excluded(_)) as usize;
+                            for bitmap in node.values.iter().take(right).skip(left + exclude_left) {
+                                acc |= bitmap;
+                            }
+                            for child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &child.sum;
+                            }
+                            return acc;
+                        }
+                        (
+                            ExplorationStep::FinalMiss { key_idx: left },
+                            ExplorationStep::FinalExact { key_idx: right },
+                        ) => {
+                            let include_right = matches!(end, Bound::Included(_)) as usize;
+                            for bitmap in node.values.iter().take(right + include_right).skip(left)
+                            {
+                                acc |= bitmap;
+                            }
+                            for child in node.children.iter().take(right + 1).skip(left + 1) {
+                                acc |= &child.sum;
+                            }
+                            return acc;
+                        }
+                        (
+                            ExplorationStep::FinalMiss { key_idx: left },
+                            ExplorationStep::FinalMiss { key_idx: right },
+                        ) => {
+                            for bitmap in node.values.iter().take(right).skip(left) {
+                                acc |= bitmap;
+                            }
+                            for child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &child.sum;
+                            }
+                            return acc;
+                        }
 
-                    if left_step == right_step
-                        && let ExplorationStep::Dive { child_idx } = left_step
-                    {
-                        explore.push(&node.children[child_idx]);
-                        continue;
-                    }
-
-                    // If we reach this point it means the left and right
-                    // are different or are not diving anymore (in which case
-                    // their content have already been handled).
-                    // We will stop exploring the tree ourselves and instead
-                    // leave that job to the simpler greater than and less than.
-
-                    if let ExplorationStep::Dive { child_idx } = left_step {
-                        match start {
-                            // The exact code of a greater than or equal
-                            Bound::Included(key) => {
-                                node.children[child_idx].explore_toward(
-                                    key,
-                                    |node, step| match step {
-                                        ExplorationStep::FinalExact { key_idx } => {
-                                            node.accumulate_ids_after(
-                                                Bound::Included(key_idx),
-                                                &mut acc,
-                                            );
-                                        }
-                                        ExplorationStep::FinalMiss { key_idx: idx }
-                                        | ExplorationStep::Dive { child_idx: idx } => {
-                                            node.accumulate_ids_after(
-                                                Bound::Included(idx),
-                                                &mut acc,
-                                            );
-                                        }
-                                    },
-                                );
+                        // OTHER
+                        (
+                            ExplorationStep::FinalExact { key_idx: left },
+                            ExplorationStep::Dive { child_idx: right },
+                        ) => {
+                            let exclude_left = matches!(start, Bound::Excluded(_)) as usize;
+                            for bitmap in node.values.iter().take(right).skip(left + exclude_left) {
+                                acc |= bitmap;
                             }
-                            // The exact code of a greater than
-                            Bound::Excluded(key) => {
-                                node.children[child_idx].explore_toward(
-                                    key,
-                                    |node, step| match step {
-                                        ExplorationStep::FinalExact { key_idx } => {
-                                            node.accumulate_ids_after(
-                                                Bound::Excluded(key_idx),
-                                                &mut acc,
-                                            );
-                                        }
-                                        ExplorationStep::FinalMiss { key_idx: idx }
-                                        | ExplorationStep::Dive { child_idx: idx } => {
-                                            node.accumulate_ids_after(
-                                                Bound::Included(idx),
-                                                &mut acc,
-                                            );
-                                        }
-                                    },
-                                );
+                            for child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &child.sum;
                             }
-                            Bound::Unbounded => unreachable!(),
-                        };
-                    }
-                    if let ExplorationStep::Dive { child_idx } = right_step {
-                        match end {
-                            // The exact code of a less than or equal
-                            Bound::Included(key) => {
-                                node.children[child_idx].explore_toward(
-                                    key,
-                                    |node, step| match step {
-                                        ExplorationStep::FinalExact { key_idx } => {
-                                            node.accumulate_ids_before(
-                                                Bound::Included(key_idx + 1),
-                                                &mut acc,
-                                            );
-                                        }
-                                        ExplorationStep::FinalMiss { key_idx: idx }
-                                        | ExplorationStep::Dive { child_idx: idx } => {
-                                            node.accumulate_ids_before(
-                                                Bound::Included(idx),
-                                                &mut acc,
-                                            );
-                                        }
-                                    },
-                                );
+                            acc |= node.children[right].query(&Query::LessThan(end.clone()));
+                            return acc;
+                        }
+                        (
+                            ExplorationStep::FinalMiss { key_idx: left },
+                            ExplorationStep::Dive { child_idx: right },
+                        ) => {
+                            for bitmap in node.values.iter().take(right).skip(left) {
+                                acc |= bitmap;
                             }
-                            // The exact code of a less than
-                            Bound::Excluded(key) => {
-                                node.children[child_idx].explore_toward(
-                                    key,
-                                    |node, step| match step {
-                                        ExplorationStep::FinalExact { key_idx } => {
-                                            node.accumulate_ids_before(
-                                                Bound::Excluded(key_idx + 1),
-                                                &mut acc,
-                                            );
-                                        }
-                                        ExplorationStep::FinalMiss { key_idx: idx }
-                                        | ExplorationStep::Dive { child_idx: idx } => {
-                                            node.accumulate_ids_before(
-                                                Bound::Included(idx),
-                                                &mut acc,
-                                            );
-                                        }
-                                    },
-                                );
+                            for child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &child.sum;
                             }
-                            Bound::Unbounded => unreachable!(),
+                            acc |= node.children[right].query(&Query::LessThan(end.clone()));
+                            return acc;
+                        }
+                        (
+                            ExplorationStep::Dive { child_idx: left },
+                            ExplorationStep::FinalExact { key_idx: right },
+                        ) => {
+                            let include_right = matches!(end, Bound::Included(_)) as usize;
+                            for bitmap in node.values.iter().take(right + include_right).skip(left)
+                            {
+                                acc |= bitmap;
+                            }
+                            for child in node.children.iter().take(right + 1).skip(left + 1) {
+                                acc |= &child.sum;
+                            }
+                            acc |= node.children[left].query(&Query::GreaterThan(start.clone()));
+                            return acc;
+                        }
+                        (
+                            ExplorationStep::Dive { child_idx: left },
+                            ExplorationStep::FinalMiss { key_idx: right },
+                        ) => {
+                            for bitmap in node.values.iter().take(right).skip(left) {
+                                acc |= bitmap;
+                            }
+                            for child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &child.sum;
+                            }
+                            acc |= node.children[left].query(&Query::GreaterThan(start.clone()));
+                            return acc;
+                        }
+                        // RECURSE HERE
+                        (
+                            ExplorationStep::Dive { child_idx: left },
+                            ExplorationStep::Dive { child_idx: right },
+                        ) if left == right => {
+                            for bitmap in node.values.iter().take(right).skip(left) {
+                                acc |= bitmap;
+                            }
+                            for child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &child.sum;
+                            }
+                            explore.push(&node.children[left]);
+                        }
+                        (
+                            ExplorationStep::Dive { child_idx: left },
+                            ExplorationStep::Dive { child_idx: right },
+                        ) => {
+                            for bitmap in node.values.iter().take(right).skip(left) {
+                                acc |= bitmap;
+                            }
+                            for child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &child.sum;
+                            }
+                            acc |= node.children[left].query(&Query::GreaterThan(start.clone()));
+                            acc |= node.children[right].query(&Query::LessThan(end.clone()));
+                            return acc;
                         }
                     }
-                    break;
                 }
 
                 acc
@@ -1226,8 +1249,58 @@ mod test {
     use proptest::prelude::*;
     proptest! {
         #[test]
+        fn range_right_unbounded_range_works(greater_than in 0_usize..=75) {
+            let f = craft_simple_facet();
+
+            // Excluded
+            let greater_than_ret = f.query(&Query::GreaterThan(Bound::Excluded(greater_than.into())));
+            let expected_range = greater_than_ret;
+            let range_ret = f.query(&Query::Range {
+                start: Bound::Excluded(greater_than.into()),
+                end: Bound::Unbounded,
+            });
+            prop_assert_eq!(expected_range, range_ret);
+
+            // Included
+            let greater_than_ret = f.query(&Query::GreaterThan(Bound::Included(greater_than.into())));
+            let expected_range = greater_than_ret;
+            let range_ret = f.query(&Query::Range {
+                start: Bound::Included(greater_than.into()),
+                end: Bound::Unbounded,
+            });
+            prop_assert_eq!(expected_range, range_ret);
+
+        }
+
+        #[test]
+        fn range_left_unbounded_range_works(less_than in 0_usize..=75) {
+            let f = craft_simple_facet();
+
+            // Excluded
+            let less_than_ret = f.query(&Query::GreaterThan(Bound::Excluded(less_than.into())));
+            let expected_range = less_than_ret;
+            let range_ret = f.query(&Query::Range {
+                start: Bound::Excluded(less_than.into()),
+                end: Bound::Unbounded,
+            });
+            prop_assert_eq!(expected_range, range_ret);
+
+            // Included
+            let less_than_ret = f.query(&Query::GreaterThan(Bound::Included(less_than.into())));
+            let expected_range = less_than_ret;
+            let range_ret = f.query(&Query::Range {
+                start: Bound::Included(less_than.into()),
+                end: Bound::Unbounded,
+            });
+            prop_assert_eq!(expected_range, range_ret);
+
+        }
+
+        #[test]
         fn range_works(greater_than in 0_usize..=75, less_than in 0_usize..=75) {
             let f = craft_simple_facet();
+
+            // Excluded x Excluded
             let greater_than_ret = f.query(&Query::GreaterThan(Bound::Excluded(greater_than.into())));
             let less_than_ret = f.query(&Query::LessThan(Bound::Excluded(less_than.into())));
             let expected_range = greater_than_ret & less_than_ret;
@@ -1235,6 +1308,42 @@ mod test {
             let range_ret = f.query(&Query::Range {
                 start: Bound::Excluded(greater_than.into()),
                 end: Bound::Excluded(less_than.into()),
+            });
+
+            prop_assert_eq!(expected_range, range_ret);
+
+            // Included x Excluded
+            let greater_than_ret = f.query(&Query::GreaterThan(Bound::Included(greater_than.into())));
+            let less_than_ret = f.query(&Query::LessThan(Bound::Excluded(less_than.into())));
+            let expected_range = greater_than_ret & less_than_ret;
+
+            let range_ret = f.query(&Query::Range {
+                start: Bound::Included(greater_than.into()),
+                end: Bound::Excluded(less_than.into()),
+            });
+
+            prop_assert_eq!(expected_range, range_ret);
+
+            // Excluded x Included
+            let greater_than_ret = f.query(&Query::GreaterThan(Bound::Excluded(greater_than.into())));
+            let less_than_ret = f.query(&Query::LessThan(Bound::Included(less_than.into())));
+            let expected_range = greater_than_ret & less_than_ret;
+
+            let range_ret = f.query(&Query::Range {
+                start: Bound::Excluded(greater_than.into()),
+                end: Bound::Included(less_than.into()),
+            });
+
+            prop_assert_eq!(expected_range, range_ret);
+
+            // Included x Included
+            let greater_than_ret = f.query(&Query::GreaterThan(Bound::Included(greater_than.into())));
+            let less_than_ret = f.query(&Query::LessThan(Bound::Included(less_than.into())));
+            let expected_range = greater_than_ret & less_than_ret;
+
+            let range_ret = f.query(&Query::Range {
+                start: Bound::Included(greater_than.into()),
+                end: Bound::Included(less_than.into()),
             });
 
             prop_assert_eq!(expected_range, range_ret);
