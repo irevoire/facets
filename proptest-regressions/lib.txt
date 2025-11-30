@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 6d557df40bd3adb7156e98469de303d21bae01d6c15b23ea01ac13f2b072ea94 # shrinks to greater_than = 36, less_than = 37
+cc d087d9e377b2bf6d01f66256ae76b26034a368aeb8f331122a1b0fe0631f860b # shrinks to greater_than = 35

@@ -1349,5 +1349,59 @@ mod test {
             prop_assert_eq!(expected_range, range_ret);
 
         }
+
+        /// We make sure (a <= X) is equivalent to (a < X OR a == X)
+        #[test]
+        fn greater_than_included_is_greater_than_or_equal(greater_than in 0_usize..=75) {
+            let f = craft_simple_facet();
+
+            let greater_than_incl = f.query(&Query::GreaterThan(Bound::Included(greater_than.into())));
+            let or = f.query(&Query::Or(
+                vec![
+                    Query::GreaterThan(Bound::Excluded(greater_than.into())),
+                    Query::Equal(greater_than.into()),
+                ]
+            ));
+            prop_assert_eq!(greater_than_incl, or);
+        }
+
+        /// We make sure (a <= X) is equivalent to (NOT (a > X))
+        #[test]
+        fn greater_than_included_is_not_less_than(greater_than in 0_usize..=75) {
+            let f = craft_simple_facet();
+
+            let greater_than_incl = f.query(&Query::GreaterThan(Bound::Included(greater_than.into())));
+            let not = f.query(&Query::Not(
+                   Box::new(Query::LessThan(Bound::Excluded(greater_than.into()))),
+            ));
+            prop_assert_eq!(greater_than_incl, not);
+        }
+
+        /// We make sure (a >= X) is equivalent to (a > X OR a == X)
+        #[test]
+        fn less_than_included_is_less_than_or_equal(less_than in 0_usize..=75) {
+            let f = craft_simple_facet();
+
+            let less_than_incl = f.query(&Query::LessThan(Bound::Included(less_than.into())));
+            let or = f.query(&Query::Or(
+                vec![
+                    Query::LessThan(Bound::Excluded(less_than.into())),
+                    Query::Equal(less_than.into()),
+                ]
+            ));
+            prop_assert_eq!(less_than_incl, or);
+        }
+
+        /// We make sure (a >= X) is equivalent to (NOT (a < X))
+        #[test]
+        fn less_than_included_is_not_greater_than(less_than in 0_usize..=75) {
+            let f = craft_simple_facet();
+
+            let less_than_incl = f.query(&Query::LessThan(Bound::Included(less_than.into())));
+            let not = f.query(&Query::Not(
+                   Box::new(Query::GreaterThan(Bound::Excluded(less_than.into()))),
+            ));
+            prop_assert_eq!(less_than_incl, not);
+        }
     }
 }
