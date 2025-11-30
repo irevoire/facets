@@ -94,34 +94,58 @@ impl Node {
             }
             Query::GreaterThan(key) => {
                 let target = match key {
-                    Bound::Included(k) | Bound::Excluded(k) => k,
                     Bound::Unbounded => return self.sum.clone(),
+                    Bound::Included(k) | Bound::Excluded(k) => k,
                 };
                 let mut acc = RoaringBitmap::new();
+
                 self.explore_toward(target, |node, step| match step {
                     ExplorationStep::FinalExact { key_idx } => {
-                        node.accumulate_ids_after(key.as_ref().map(|_| key_idx), &mut acc);
+                        let exclude = matches!(key, Bound::Excluded(_)) as usize;
+                        for bitmap in node.values.iter().skip(key_idx + exclude) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().skip(key_idx + 1) {
+                            acc |= &child.sum;
+                        }
                     }
                     ExplorationStep::FinalMiss { key_idx: idx }
                     | ExplorationStep::Dive { child_idx: idx } => {
-                        node.accumulate_ids_after(Bound::Included(idx), &mut acc);
+                        for bitmap in node.values.iter().skip(idx) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().skip(idx + 1) {
+                            acc |= &child.sum;
+                        }
                     }
                 });
                 acc
             }
             Query::LessThan(key) => {
                 let target = match key {
-                    Bound::Included(k) | Bound::Excluded(k) => k,
                     Bound::Unbounded => return self.sum.clone(),
+                    Bound::Included(k) | Bound::Excluded(k) => k,
                 };
                 let mut acc = RoaringBitmap::new();
+
                 self.explore_toward(target, |node, step| match step {
                     ExplorationStep::FinalExact { key_idx } => {
-                        node.accumulate_ids_before(key.as_ref().map(|_| key_idx + 1), &mut acc);
+                        let include = matches!(key, Bound::Included(_)) as usize;
+                        for bitmap in node.values.iter().take(key_idx + include) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().take(key_idx + 1) {
+                            acc |= &child.sum;
+                        }
                     }
                     ExplorationStep::FinalMiss { key_idx: idx }
                     | ExplorationStep::Dive { child_idx: idx } => {
-                        node.accumulate_ids_before(Bound::Included(idx), &mut acc);
+                        for bitmap in node.values.iter().take(idx) {
+                            acc |= bitmap;
+                        }
+                        for child in node.children.iter().take(idx) {
+                            acc |= &child.sum;
+                        }
                     }
                 });
                 acc
