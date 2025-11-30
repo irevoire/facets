@@ -3,10 +3,20 @@ name = "facets"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace]
+members = ["saute"]
+resolver = "3"
+
+[workspace.dependencies]
 roaring = "0.11.2"
 thiserror = "2.0.17"
-
-[dev-dependencies]
 insta = "1.44.1"
 proptest = "1.0.0"
+
+[dependencies]
+roaring = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+proptest = { workspace = true }
