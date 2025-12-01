@@ -429,7 +429,7 @@ impl Node {
 
     /// Explore the btree from the root to the specified key calling your hook
     /// on every step we take in the tree.
-    fn explore_toward(
+    pub fn explore_toward(
         this: ArenaId,
         key: &Key,
         arena: &Arena,
@@ -561,6 +561,83 @@ impl Facet {
         let children = self.arena.get_mut(node_idx).children.clone();
         for child_idx in children {
             self.recalculate_parents(child_idx, Some(node_idx));
+        }
+    }
+
+    pub fn insert(&mut self, key: Key, value: RoaringBitmap) {
+        let mut thing = None;
+        Node::explore_toward(self.root_idx, &key, &self.arena, |n, step| {
+            match step {
+                ExplorationStep::FinalExact { .. } | ExplorationStep::FinalMiss { .. } => {
+                    thing = Some((n.arena_idx, step));
+                }
+                ExplorationStep::Dive { .. } => { /* do nothing */ }
+            }
+        });
+        let (id, step) = thing.unwrap();
+        let mut node = self.arena.get_mut(id);
+        match step {
+            ExplorationStep::FinalExact { key_idx } => {
+                node.values[key_idx] |= &value;
+                node.sum |= &value;
+                while let Some(id) = node.parent {
+                    node = self.arena.get_mut(id);
+                    node.sum |= &value;
+                }
+            }
+            ExplorationStep::FinalMiss { key_idx } => {
+                let mut key_idx = key_idx;
+                let mut key = key;
+                let mut value = value;
+                while node.children.len() >= self.order {
+                    node.keys.insert(key_idx, key.clone());
+                    node.values.insert(key_idx, value.clone());
+
+                    let median_idx = self.order / 2;
+                    key = node.keys[median_idx].clone();
+                    value = node.values[median_idx].clone();
+
+                    let left_keys: Vec<_> = node.keys.iter().cloned().take(median_idx).collect();
+                    let left_values: Vec<_> =
+                        node.values.iter().cloned().take(median_idx).collect();
+
+                    let right_keys: Vec<_> =
+                        node.keys.iter().cloned().skip(median_idx + 1).collect();
+                    let right_values: Vec<_> =
+                        node.values.iter().cloned().skip(median_idx + 1).collect();
+
+                    node.keys = left_keys;
+                    node.values = left_values;
+
+                    match node.parent {
+                        Some(idx) => {
+                            let right_id = self.arena.empty_node();
+                            let right_node = self.arena.get_mut(right_id);
+                            right_node.keys = right_keys;
+                            right_node.values = right_values;
+                            right_node.parent = Some(idx);
+                            node = self.arena.get_mut(idx);
+                            key_idx = match node.next_step_toward(&key) {
+                                ExplorationStep::FinalExact { key_idx } => unreachable!("Oh no!"),
+                                ExplorationStep::FinalMiss { key_idx: idx }
+                                | ExplorationStep::Dive { child_idx: idx } => idx,
+                            };
+                        }
+                        None => {
+                            // create new root
+                            return;
+                        }
+                    };
+                }
+                node.keys.insert(key_idx, key);
+                node.values.insert(key_idx, value.clone());
+                node.sum |= &value;
+                while let Some(id) = node.parent {
+                    node = self.arena.get_mut(id);
+                    node.sum |= &value;
+                }
+            }
+            ExplorationStep::Dive { child_idx } => unreachable!("Oh no!"),
         }
     }
 
