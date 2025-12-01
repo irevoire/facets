@@ -6,8 +6,15 @@ use roaring::RoaringBitmap;
 //#[derive(Debug)]
 pub struct Facet {
     order: usize,
-    root_idx: usize,
-    arena: Vec<Option<Node>>,
+    root_idx: ArenaId,
+    arena: Arena,
+}
+
+#[derive(Default, Clone, Copy)]
+struct ArenaId(usize);
+
+struct Arena {
+    nodes: Vec<Option<Node>>,
 }
 
 #[derive(Default)]
@@ -29,9 +36,9 @@ pub struct Node {
     /// There is only two exception:
     /// - The root node can contains zero value and zero children.
     /// - The leaves can contains multiple values but zero children.
-    children: Vec<usize>,
-    arena_idx: usize,
-    parent: Option<usize>,
+    children: Vec<ArenaId>,
+    arena_idx: ArenaId,
+    parent: Option<ArenaId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,8 +56,34 @@ pub enum ExplorationStep {
     Dive { child_idx: usize },
 }
 
+impl Arena {
+    pub fn new() -> Self {
+        let mut this = Self { nodes: vec![] };
+        this.empty_node();
+        this
+    }
+
+    pub fn get(&self, id: ArenaId) -> Option<&Node> {
+        self.nodes[id.0].as_ref()
+    }
+
+    pub fn get_mut(&mut self, id: ArenaId) -> Option<&mut Node> {
+        self.nodes[id.0].as_mut()
+    }
+
+    pub fn empty_node(&mut self) -> ArenaId {
+        let id = ArenaId(self.nodes.len());
+        self.nodes.push(Some(Node::new_empty(id, None)));
+        id
+    }
+
+    pub fn delete(&mut self, id: ArenaId) {
+        self.nodes[id.0] = None;
+    }
+}
+
 impl Node {
-    pub fn new_empty(arena_idx: usize, parent: Option<usize>) -> Self {
+    fn new_empty(arena_idx: ArenaId, parent: Option<ArenaId>) -> Self {
         Self {
             sum: RoaringBitmap::new(),
             keys: vec![],
@@ -62,11 +95,11 @@ impl Node {
     }
 
     #[inline]
-    pub fn is_leaf(&self) -> bool {
+    fn is_leaf(&self) -> bool {
         self.children.is_empty()
     }
 
-    pub fn query(&self, query: &Query, arena: &[Option<Node>]) -> RoaringBitmap {
+    fn query(&self, query: &Query, arena: &Arena) -> RoaringBitmap {
         match query {
             Query::All => self.sum.clone(),
             Query::None => RoaringBitmap::new(),
@@ -119,8 +152,8 @@ impl Node {
                         for bitmap in node.values.iter().skip(key_idx + exclude) {
                             acc |= bitmap;
                         }
-                        for child in node.children.iter().skip(key_idx + 1) {
-                            acc |= &arena[*child].as_ref().unwrap().sum;
+                        for &child in node.children.iter().skip(key_idx + 1) {
+                            acc |= &arena.get(child).unwrap().sum;
                         }
                     }
                     ExplorationStep::FinalMiss { key_idx: idx }
@@ -128,8 +161,8 @@ impl Node {
                         for bitmap in node.values.iter().skip(idx) {
                             acc |= bitmap;
                         }
-                        for child in node.children.iter().skip(idx + 1) {
-                            acc |= &arena[*child].as_ref().unwrap().sum;
+                        for &child in node.children.iter().skip(idx + 1) {
+                            acc |= &arena.get(child).unwrap().sum;
                         }
                     }
                 });
@@ -148,8 +181,8 @@ impl Node {
                         for bitmap in node.values.iter().take(key_idx + include) {
                             acc |= bitmap;
                         }
-                        for child in node.children.iter().take(key_idx + 1) {
-                            acc |= &arena[*child].as_ref().unwrap().sum;
+                        for &child in node.children.iter().take(key_idx + 1) {
+                            acc |= &arena.get(child).unwrap().sum;
                         }
                     }
                     ExplorationStep::FinalMiss { key_idx: idx }
@@ -157,8 +190,8 @@ impl Node {
                         for bitmap in node.values.iter().take(idx) {
                             acc |= bitmap;
                         }
-                        for child in node.children.iter().take(idx) {
-                            acc |= &arena[*child].as_ref().unwrap().sum;
+                        for &child in node.children.iter().take(idx) {
+                            acc |= &arena.get(child).unwrap().sum;
                         }
                     }
                 });
@@ -216,8 +249,8 @@ impl Node {
                             {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right + 1).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right + 1).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
                             return acc;
                         }
@@ -229,8 +262,8 @@ impl Node {
                             for bitmap in node.values.iter().take(right).skip(left + exclude_left) {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
                             return acc;
                         }
@@ -243,8 +276,8 @@ impl Node {
                             {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right + 1).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right + 1).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
                             return acc;
                         }
@@ -255,8 +288,8 @@ impl Node {
                             for bitmap in node.values.iter().take(right).skip(left) {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
                             return acc;
                         }
@@ -270,11 +303,11 @@ impl Node {
                             for bitmap in node.values.iter().take(right).skip(left + exclude_left) {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
-                            acc |= arena[node.children[right]]
-                                .as_ref()
+                            acc |= arena
+                                .get(node.children[right])
                                 .unwrap()
                                 .query(&Query::LessThan(end.clone()), arena);
                             return acc;
@@ -286,11 +319,11 @@ impl Node {
                             for bitmap in node.values.iter().take(right).skip(left) {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
-                            acc |= arena[node.children[right]]
-                                .as_ref()
+                            acc |= arena
+                                .get(node.children[right])
                                 .unwrap()
                                 .query(&Query::LessThan(end.clone()), arena);
                             return acc;
@@ -304,11 +337,11 @@ impl Node {
                             {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right + 1).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right + 1).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
-                            acc |= arena[node.children[left]]
-                                .as_ref()
+                            acc |= arena
+                                .get(node.children[left])
                                 .unwrap()
                                 .query(&Query::GreaterThan(start.clone()), arena);
                             return acc;
@@ -320,11 +353,11 @@ impl Node {
                             for bitmap in node.values.iter().take(right).skip(left) {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
-                            acc |= arena[node.children[left]]
-                                .as_ref()
+                            acc |= arena
+                                .get(node.children[left])
                                 .unwrap()
                                 .query(&Query::GreaterThan(start.clone()), arena);
                             return acc;
@@ -337,10 +370,10 @@ impl Node {
                             for bitmap in node.values.iter().take(right).skip(left) {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
-                            explore.push(&arena[node.children[left]].as_ref().unwrap());
+                            explore.push(&arena.get(node.children[left]).unwrap());
                         }
                         (
                             ExplorationStep::Dive { child_idx: left },
@@ -349,15 +382,15 @@ impl Node {
                             for bitmap in node.values.iter().take(right).skip(left) {
                                 acc |= bitmap;
                             }
-                            for child in node.children.iter().take(right).skip(left + 1) {
-                                acc |= &arena[*child].as_ref().unwrap().sum;
+                            for &child in node.children.iter().take(right).skip(left + 1) {
+                                acc |= &arena.get(child).unwrap().sum;
                             }
-                            acc |= arena[node.children[left]]
-                                .as_ref()
+                            acc |= arena
+                                .get(node.children[left])
                                 .unwrap()
                                 .query(&Query::GreaterThan(start.clone()), arena);
-                            acc |= arena[node.children[right]]
-                                .as_ref()
+                            acc |= arena
+                                .get(node.children[right])
                                 .unwrap()
                                 .query(&Query::LessThan(end.clone()), arena);
                             return acc;
@@ -401,16 +434,16 @@ impl Node {
 
     /// Explore the btree from the root to the specified key calling your hook
     /// on every step we take in the tree.
-    pub fn explore_toward(
-        this: usize,
+    fn explore_toward(
+        this: ArenaId,
         key: &Key,
-        arena: &[Option<Node>],
+        arena: &Arena,
         mut hook: impl FnMut(&Self, ExplorationStep),
     ) {
         let mut explore = vec![this];
 
         while let Some(node) = explore.pop() {
-            let node = arena[node].as_ref().unwrap();
+            let node = arena.get(node).unwrap();
             let step = node.next_step_toward(key);
             hook(&node, step);
             if let ExplorationStep::Dive { child_idx } = step {
@@ -421,16 +454,16 @@ impl Node {
 
     /// Explore the btree from the root to the specified key calling your hook
     /// on every step we take in the tree.
-    pub fn explore_toward_mut(
-        this: usize,
+    fn explore_toward_mut(
+        this: ArenaId,
         key: &Key,
-        arena: &mut [Option<Node>],
+        arena: &mut Arena,
         mut hook: impl FnMut(&mut Self, ExplorationStep),
     ) {
         let mut explore = vec![this];
 
         while let Some(node) = explore.pop() {
-            let node = arena[node].as_mut().unwrap();
+            let node = arena.get_mut(node).unwrap();
             let step = node.next_step_toward(key);
             hook(node, step);
             if let ExplorationStep::Dive { child_idx } = step {
@@ -508,13 +541,13 @@ impl Facet {
     pub fn on_ram() -> Self {
         Self {
             order: 8,
-            root_idx: 0,
-            arena: vec![Some(Node::new_empty(0, None))],
+            root_idx: ArenaId(0),
+            arena: Arena::new(),
         }
     }
 
     fn root(&self) -> &Node {
-        self.arena[self.root_idx].as_ref().unwrap()
+        self.arena.get(self.root_idx).unwrap()
     }
 
     /// Process a query and return all the matching identifiers.
@@ -527,39 +560,14 @@ impl Facet {
         self.root().keys.is_empty()
     }
 
-    fn recalculate_parents(&mut self, node_idx: usize, parent_idx: Option<usize>) {
+    fn recalculate_parents(&mut self, node_idx: ArenaId, parent_idx: Option<ArenaId>) {
         // TODO: Unwraps
-        self.arena[node_idx].as_mut().unwrap().parent = parent_idx;
-        let children = self.arena[node_idx].as_mut().unwrap().children.clone();
+        self.arena.get_mut(node_idx).unwrap().parent = parent_idx;
+        let children = self.arena.get_mut(node_idx).unwrap().children.clone();
         for child_idx in children {
             self.recalculate_parents(child_idx, Some(node_idx));
         }
     }
-
-    // pub fn insert(&mut self, key: Key, value: RoaringBitmap) {
-    //     let mut path = vec![];
-    //     self.btree
-    //         .explore_toward_mut(&key, |node, step| match step {
-    //             // Key already exists, update the value
-    //             ExplorationStep::FinalExact { key_idx } => {
-    //                 node.values[key_idx] |= value.clone();
-    //                 node.sum |= value.clone();
-    //             }
-    //             // Key doesn't exist yet, do the thing
-    //             ExplorationStep::FinalMiss { key_idx } => {
-    //                 if node.keys.len() < self.order {
-    //                     node.keys.insert(key_idx, key.clone());
-    //                     node.values.insert(key_idx, value.clone());
-    //                     node.children.insert(key_idx, Node::new_empty());
-    //                 }
-    //             }
-    //             // We haven't found where to insert yet, we keep diving,
-    //             // keeping track of where we've been
-    //             ExplorationStep::Dive { child_idx } => {
-    //                 path.push(child_idx);
-    //             }
-    //         });
-    // }
 
     /// Make sure the whole btree is well formed. Will explore all nodes and
     /// return an error for each corruption found.
@@ -572,7 +580,7 @@ impl Facet {
 
         // Each entry contains the current node + the path that leads to it.
         // The root have an empty path.
-        let mut to_explore = vec![(self.arena[self.root_idx].as_ref().unwrap(), Vec::new())];
+        let mut to_explore = vec![(self.root(), Vec::new())];
 
         while let Some((node, path)) = to_explore.pop() {
             if node.keys.len() > self.order {
@@ -616,7 +624,7 @@ impl Facet {
             // It's also the perfect time to call ourselves on the next child.
             let mut remaining = node.sum.clone();
             for (idx, &child) in node.children.iter().enumerate() {
-                let ret = &self.arena[child].as_ref().unwrap().sum - &node.sum;
+                let ret = &self.arena.get(child).unwrap().sum - &node.sum;
                 if !ret.is_empty() {
                     errors.push(WellFormedError::from_corruption(
                         &path,
@@ -625,7 +633,7 @@ impl Facet {
                         },
                     ));
                 }
-                remaining -= &self.arena[child].as_ref().unwrap().sum;
+                remaining -= &self.arena.get(child).unwrap().sum;
 
                 // let's enqueue the next values to iterate on
                 let mut new_path = path.clone();
@@ -644,7 +652,7 @@ impl Facet {
                         right: after.clone(),
                     });
                 }
-                to_explore.push((self.arena[child].as_ref().unwrap(), new_path));
+                to_explore.push((self.arena.get(child).unwrap(), new_path));
             }
 
             // our own values must also be checked and removed from remaining
@@ -779,33 +787,33 @@ mod test {
     fn craft_simple_facet() -> Facet {
         let n0 = Node {
             parent: None,
-            arena_idx: 0,
+            arena_idx: ArenaId(0),
             sum: RoaringBitmap::from_sorted_iter(0..=8).unwrap(),
             keys: vec![35.into()],
             values: vec![RoaringBitmap::from_iter([3])],
-            children: vec![1, 4],
+            children: vec![ArenaId(1), ArenaId(4)],
         };
 
         let n1 = Node {
-            parent: Some(0),
-            arena_idx: 1,
+            parent: Some(ArenaId(0)),
+            arena_idx: ArenaId(1),
             sum: RoaringBitmap::from_iter([2, 1, 4, 7, 8]),
             keys: vec![22.into()],
             values: vec![RoaringBitmap::from_iter([2])],
-            children: vec![2, 3],
+            children: vec![ArenaId(2), ArenaId(3)],
         };
 
         let n2 = Node {
-            parent: Some(1),
-            arena_idx: 2,
+            parent: Some(ArenaId(1)),
+            arena_idx: ArenaId(2),
             sum: RoaringBitmap::from_iter([1, 7]),
             keys: vec![12.into(), 20.into()],
             values: vec![RoaringBitmap::from_iter([7]), RoaringBitmap::from_iter([1])],
             children: Vec::new(),
         };
         let n3 = Node {
-            parent: Some(1),
-            arena_idx: 3,
+            parent: Some(ArenaId(1)),
+            arena_idx: ArenaId(3),
             sum: RoaringBitmap::from_iter([4, 8]),
             keys: vec![24.into(), 25.into()],
             values: vec![RoaringBitmap::from_iter([8]), RoaringBitmap::from_iter([4])],
@@ -813,17 +821,17 @@ mod test {
         };
 
         let n4 = Node {
-            parent: Some(0),
-            arena_idx: 4,
+            parent: Some(ArenaId(0)),
+            arena_idx: ArenaId(4),
             sum: RoaringBitmap::from_iter([6, 5, 0]),
             keys: vec![45.into()],
             values: vec![RoaringBitmap::from_iter([6])],
-            children: vec![5, 6],
+            children: vec![ArenaId(5), ArenaId(6)],
         };
 
         let n5 = Node {
-            parent: Some(4),
-            arena_idx: 5,
+            parent: Some(ArenaId(4)),
+            arena_idx: ArenaId(5),
             sum: RoaringBitmap::from_iter([5]),
             keys: vec![41.into()],
             values: vec![RoaringBitmap::from_iter([5])],
@@ -831,8 +839,8 @@ mod test {
         };
 
         let n6 = Node {
-            parent: Some(4),
-            arena_idx: 6,
+            parent: Some(ArenaId(4)),
+            arena_idx: ArenaId(6),
             sum: RoaringBitmap::from_iter([0]),
             keys: vec![65.into()],
             values: vec![RoaringBitmap::from_iter([0])],
@@ -841,16 +849,18 @@ mod test {
 
         Facet {
             order: 3,
-            root_idx: 0,
-            arena: vec![
-                Some(n0),
-                Some(n1),
-                Some(n2),
-                Some(n3),
-                Some(n4),
-                Some(n5),
-                Some(n6),
-            ],
+            root_idx: ArenaId(0),
+            arena: Arena {
+                nodes: vec![
+                    Some(n0),
+                    Some(n1),
+                    Some(n2),
+                    Some(n3),
+                    Some(n4),
+                    Some(n5),
+                    Some(n6),
+                ],
+            },
         }
     }
 
@@ -877,7 +887,7 @@ mod test {
     #[test]
     fn well_formed_empty_non_root_node() {
         let mut f = craft_simple_facet();
-        f.arena[1].as_mut().unwrap().keys.clear();
+        f.arena.get_mut(ArenaId(1)).unwrap().keys.clear();
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"
             Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because empty node which is illegal except for the root node if the whole btree is empty.
@@ -889,7 +899,7 @@ mod test {
     #[test]
     fn well_formed_mismatch_nb_keys_values() {
         let mut f = craft_simple_facet();
-        f.arena[1].as_mut().unwrap().values.pop();
+        f.arena.get_mut(ArenaId(1)).unwrap().values.pop();
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"
             Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of keys (1) and values (0) do not match and are supposed to be equal
@@ -900,7 +910,7 @@ mod test {
     #[test]
     fn well_formed_mismatch_nb_children() {
         let mut f = craft_simple_facet();
-        f.arena[1].as_mut().unwrap().children.pop();
+        f.arena.get_mut(ArenaId(1)).unwrap().children.pop();
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"
             Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of children is supposed to be equal to the number of keys (1) + 1 but instead got 1 children.
@@ -911,7 +921,7 @@ mod test {
     #[test]
     fn well_formed_unknown_value_in_child() {
         let mut f = craft_simple_facet();
-        f.arena[1].as_mut().unwrap().sum.insert(1234);
+        f.arena.get_mut(ArenaId(1)).unwrap().sum.insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because values RoaringBitmap<[1234]> are contained in child but not in father\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because values RoaringBitmap<[1234]> are contained in the value sum of a node, but not in its value or children");
     }
@@ -919,7 +929,7 @@ mod test {
     #[test]
     fn well_formed_unknown_sum_node() {
         let mut f = craft_simple_facet();
-        f.arena[0].as_mut().unwrap().sum.insert(1234);
+        f.arena.get_mut(ArenaId(0)).unwrap().sum.insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because values RoaringBitmap<[1234]> are contained in the value sum of a node, but not in its value or children");
     }
@@ -927,7 +937,7 @@ mod test {
     #[test]
     fn well_formed_unknown_direct_value_node() {
         let mut f = craft_simple_facet();
-        f.arena[0].as_mut().unwrap().values[0].insert(1234);
+        f.arena.get_mut(ArenaId(0)).unwrap().values[0].insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because key [0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#) contains the following values RoaringBitmap<[1234]> that are not contained in the sum of the node");
     }
