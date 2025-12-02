@@ -545,6 +545,10 @@ impl Facet {
         self.arena.get(self.root_idx)
     }
 
+    fn root_mut(&mut self) -> &mut Node {
+        self.arena.get_mut(self.root_idx)
+    }
+
     /// Process a query and return all the matching identifiers.
     pub fn query(&self, query: &Query) -> RoaringBitmap {
         self.root().query(query, &self.arena)
@@ -589,7 +593,7 @@ impl Facet {
                 let mut key_idx = key_idx;
                 let mut key = key;
                 let mut value = value;
-                while node.children.len() >= self.order {
+                while node.keys.len() >= self.order {
                     node.keys.insert(key_idx, key.clone());
                     node.values.insert(key_idx, value.clone());
 
@@ -617,14 +621,35 @@ impl Facet {
                             right_node.values = right_values;
                             right_node.parent = Some(idx);
                             node = self.arena.get_mut(idx);
+                            node.children.push(right_id);
                             key_idx = match node.next_step_toward(&key) {
-                                ExplorationStep::FinalExact { key_idx } => unreachable!("Oh no!"),
+                                ExplorationStep::FinalExact { key_idx: _ } => {
+                                    unreachable!("Oh no!")
+                                }
                                 ExplorationStep::FinalMiss { key_idx: idx }
                                 | ExplorationStep::Dive { child_idx: idx } => idx,
                             };
                         }
                         None => {
-                            // create new root
+                            let old_root = node.arena_idx;
+                            let new_root = self.arena.empty_node();
+                            let right_id = self.arena.empty_node();
+
+                            self.root_idx = new_root;
+
+                            let left_node = self.arena.get_mut(old_root);
+                            left_node.parent = Some(new_root);
+
+                            let right_node = self.arena.get_mut(right_id);
+                            right_node.keys = right_keys;
+                            right_node.values = right_values;
+                            right_node.parent = Some(new_root);
+
+                            self.root_mut().children.push(old_root);
+                            self.root_mut().children.push(right_id);
+
+                            self.root_mut().keys.push(key);
+                            self.root_mut().values.push(value);
                             return;
                         }
                     };
@@ -856,6 +881,21 @@ mod test {
         f.assert_well_formed().unwrap();
     }
 
+    fn craft_facet_with_inserts() -> Facet {
+        let mut f = Facet::on_ram();
+        f.insert(65.into(), RoaringBitmap::from_iter([0]));
+        f.insert(20.into(), RoaringBitmap::from_iter([1]));
+        f.insert(22.into(), RoaringBitmap::from_iter([2]));
+        f.insert(35.into(), RoaringBitmap::from_iter([3]));
+        f.insert(25.into(), RoaringBitmap::from_iter([4]));
+        f.insert(41.into(), RoaringBitmap::from_iter([5]));
+        f.insert(48.into(), RoaringBitmap::from_iter([6]));
+        f.insert(12.into(), RoaringBitmap::from_iter([7]));
+        f.insert(24.into(), RoaringBitmap::from_iter([8]));
+
+        f
+    }
+
     fn craft_simple_facet() -> Facet {
         let n0 = Node {
             parent: None,
@@ -939,6 +979,15 @@ mod test {
     #[test]
     fn well_formed_is_well_formed() {
         let facet = craft_simple_facet();
+        facet
+            .assert_well_formed()
+            .map_err(|e| Wfe(&e).to_string())
+            .unwrap();
+    }
+
+    #[test]
+    fn well_formed_insertion_facet_is_well_formed() {
+        let facet = craft_facet_with_inserts();
         facet
             .assert_well_formed()
             .map_err(|e| Wfe(&e).to_string())
