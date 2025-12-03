@@ -470,7 +470,7 @@ impl Node {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Key {
-    bytes: Vec<u8>,
+    pub bytes: Vec<u8>,
 }
 
 impl From<&str> for Key {
@@ -871,7 +871,61 @@ pub enum Corruption {
 
 #[cfg(test)]
 mod test {
+    use std::collections::VecDeque;
+
     use super::*;
+
+    impl Facet {
+        pub fn ascii_draw(
+            &self,
+            size_of_keys: usize,
+            key_formatter: impl Fn(&Key) -> String,
+        ) -> String {
+            let mut ret = String::new();
+
+            // We use a vecdeque to be able to push at the end but pop at the
+            // front.
+            // The general idea is that we're always going to keep everything
+            // ordered, everytime the depth change it means we must put a
+            // newline and all the children of all parents must be correctly
+            // ordered.
+            let mut explore = VecDeque::new();
+            explore.push_back((self.root(), self.depth()));
+
+            let size_of_node = size_of_keys * self.order + 2;
+            let mut last_identation = 0;
+
+            while let Some((node, indentation)) = explore.pop_front() {
+                if last_identation != indentation {
+                    ret.push('\n');
+                    ret.push_str(&" ".repeat(indentation * size_of_node));
+                    last_identation = indentation;
+                }
+                let current_size = ret.len();
+                ret.push('[');
+                for key in node.keys.iter() {
+                    ret.push_str(&format!(
+                        "{:width$}|",
+                        key_formatter(key),
+                        width = size_of_keys
+                    ));
+                }
+                ret.pop();
+                ret.push(']');
+
+                let missing_spaces = (ret.len() - current_size) as isize - size_of_node as isize;
+                if missing_spaces < 0 {
+                    ret.push_str(&" ".repeat(missing_spaces.unsigned_abs()));
+                }
+
+                for child in node.children.iter() {
+                    explore.push_back((self.arena.get(*child), indentation - 1));
+                }
+            }
+
+            ret
+        }
+    }
 
     /// Gives us a nice display implementation over a list of
     /// `WellFormedError`s. Useful for `insta`.
@@ -991,6 +1045,12 @@ mod test {
                 ],
             },
         }
+    }
+
+    #[test]
+    fn ascii_test_display() {
+        let f = craft_simple_facet();
+        insta::assert_snapshot!(f.ascii_draw(2, |key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string()), @"         [35]");
     }
 
     #[test]
