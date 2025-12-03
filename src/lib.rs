@@ -541,6 +541,23 @@ impl Facet {
         }
     }
 
+    /// Return the depth of the btree.
+    pub fn depth(&self) -> usize {
+        // even the empty btree contains 1 node
+        let mut depth = 1;
+        let mut to_explore = vec![self.root()];
+
+        while let Some(current) = to_explore.pop() {
+            // don't need to explore other children since the btree is balanced
+            if let Some(child) = current.children.first() {
+                depth += 1;
+                to_explore.push(self.arena.get(*child));
+            }
+        }
+
+        depth
+    }
+
     fn root(&self) -> &Node {
         self.arena.get(self.root_idx)
     }
@@ -974,6 +991,12 @@ mod test {
                 ],
             },
         }
+    }
+
+    #[test]
+    fn depth() {
+        assert_eq!(Facet::on_ram().depth(), 1);
+        assert_eq!(craft_simple_facet().depth(), 3);
     }
 
     #[test]
