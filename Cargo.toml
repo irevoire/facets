@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["saute"]
+members = [ "btree","saute"]
 resolver = "3"
 
 [workspace.dependencies]
@@ -16,7 +16,3 @@ proptest = "1.0.0"
 [dependencies]
 roaring = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-insta = { workspace = true }
-proptest = { workspace = true }
