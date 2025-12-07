@@ -466,6 +466,46 @@ impl Node {
             }
         }
     }
+
+    /// 35
+    ///     22
+    ///         12, 20
+    ///         24, 25
+    ///     45
+    ///         41
+    ///         65
+
+    pub fn better_ascii_draw(
+        &self,
+        tab: &str,
+        depth: usize,
+        key_formatter: &impl Fn(&Key) -> String,
+        arena: &Arena,
+    ) -> String {
+        let this_line = format!(
+            "{}{}",
+            tab.repeat(depth),
+            self.keys
+                .iter()
+                .map(key_formatter)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        format!(
+            "{this_line}: v:{:?} s:{:?}\n{}",
+            self.values,
+            self.sum,
+            self.children
+                .iter()
+                .map(|child| {
+                    arena
+                        .get(*child)
+                        .better_ascii_draw(tab, depth + 1, key_formatter, arena)
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+        )
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -725,7 +765,7 @@ impl Facet {
                 errors.push(WellFormedError::from_corruption(
                     &path,
                     Corruption::BadNumberOfChildren {
-                        keys: self.root().keys.len(),
+                        keys: node.keys.len(),
                         children: node.children.len(),
                     },
                 ));
@@ -744,6 +784,7 @@ impl Facet {
                         &path,
                         Corruption::UnknownValuesInChild {
                             unknown_values: ret,
+                            parent_values: node.sum.clone(),
                         },
                     ));
                 }
@@ -778,6 +819,7 @@ impl Facet {
                         Corruption::UnknownDirectValuesNode {
                             key: node.keys[idx].clone(),
                             unknown_values: ret,
+                            node_sum: node.sum.clone(),
                         },
                     ));
                 }
@@ -854,18 +896,22 @@ pub enum Corruption {
         "number of children is supposed to be equal to the number of keys ({keys}) + 1 but instead got {children} children."
     )]
     BadNumberOfChildren { keys: usize, children: usize },
-    #[error("values {unknown_values:?} are contained in child but not in father")]
-    UnknownValuesInChild { unknown_values: RoaringBitmap },
+    #[error("values {unknown_values:?} are contained in child but not in parent {parent_values:?}")]
+    UnknownValuesInChild {
+        unknown_values: RoaringBitmap,
+        parent_values: RoaringBitmap,
+    },
     #[error(
         "values {unknown_values:?} are contained in the value sum of a node, but not in its value or children"
     )]
     UnknownSumNode { unknown_values: RoaringBitmap },
     #[error(
-        "key {key:?} contains the following values {unknown_values:?} that are not contained in the sum of the node"
+        "key {key:?} contains the following values {unknown_values:?} that are not contained in the sum of the node {node_sum:?}"
     )]
     UnknownDirectValuesNode {
         key: Key,
         unknown_values: RoaringBitmap,
+        node_sum: RoaringBitmap,
     },
 }
 
@@ -1050,7 +1096,12 @@ mod test {
     #[test]
     fn ascii_test_display() {
         let f = craft_simple_facet();
-        insta::assert_snapshot!(f.ascii_draw(2, |key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string()), @"         [35]");
+        insta::assert_snapshot!(f.ascii_draw(2, |key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string()), @r"
+
+                        [35]    
+                [22]    [45]    
+        [12|20] [24|25] [41]    [65]
+        ");
     }
 
     #[test]
@@ -1071,10 +1122,10 @@ mod test {
     #[test]
     fn well_formed_insertion_facet_is_well_formed() {
         let facet = craft_facet_with_inserts();
-        facet
-            .assert_well_formed()
-            .map_err(|e| Wfe(&e).to_string())
-            .unwrap();
+        match facet.assert_well_formed().map_err(|e| Wfe(&e).to_string()) {
+            Ok(_) => (),
+            Err(err) => panic!("{err}"),
+        }
     }
 
     #[test]
@@ -1093,11 +1144,7 @@ mod test {
         let mut f = craft_simple_facet();
         f.arena.get_mut(ArenaId(1)).keys.clear();
         let errors = f.assert_well_formed().unwrap_err();
-        insta::assert_snapshot!(Wfe(&errors), @"
-            Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because empty node which is illegal except for the root node if the whole btree is empty.
-            Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of keys (0) and values (1) do not match and are supposed to be equal
-            Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of children is supposed to be equal to the number of keys (1) + 1 but instead got 2 children.
-        ");
+        insta::assert_snapshot!(Wfe(&errors), @"Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because empty node which is illegal except for the root node if the whole btree is empty.\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of keys (0) and values (1) do not match and are supposed to be equal\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of children is supposed to be equal to the number of keys (0) + 1 but instead got 2 children.");
     }
 
     #[test]
@@ -1127,7 +1174,7 @@ mod test {
         let mut f = craft_simple_facet();
         f.arena.get_mut(ArenaId(1)).sum.insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
-        insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because values RoaringBitmap<[1234]> are contained in child but not in father\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because values RoaringBitmap<[1234]> are contained in the value sum of a node, but not in its value or children");
+        insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because values RoaringBitmap<[1234]> are contained in child but not in parent RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because values RoaringBitmap<[1234]> are contained in the value sum of a node, but not in its value or children");
     }
 
     #[test]
@@ -1143,7 +1190,7 @@ mod test {
         let mut f = craft_simple_facet();
         f.arena.get_mut(ArenaId(0)).values[0].insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
-        insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because key [0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#) contains the following values RoaringBitmap<[1234]> that are not contained in the sum of the node");
+        insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because key [0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#) contains the following values RoaringBitmap<[1234]> that are not contained in the sum of the node RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
     }
 
     #[test]
