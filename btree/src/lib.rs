@@ -1,22 +1,18 @@
 use core::fmt;
 use std::ops::Bound;
 
+use facets::{Key, Query};
 use roaring::RoaringBitmap;
 
 //#[derive(Debug)]
-pub struct Facet {
+pub struct BTree {
     order: usize,
-    root_idx: ArenaId,
-    arena: Arena,
+    root_idx: NodeId,
+    arena: Nodes,
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-struct ArenaId(usize);
-
-struct Arena {
-    nodes: Vec<Option<Node>>,
-}
+type Nodes = facets::Arena<Node>;
+type NodeId = facets::ArenaId<Node>;
 
 #[derive(Default)]
 pub struct Node {
@@ -38,9 +34,9 @@ pub struct Node {
     /// There is only two exception:
     /// - The root node can contains zero value and zero children.
     /// - The leaves can contains multiple values but zero children.
-    children: Vec<ArenaId>,
-    arena_idx: ArenaId,
-    parent: Option<ArenaId>,
+    children: Vec<NodeId>,
+    arena_idx: NodeId,
+    parent: Option<NodeId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,34 +54,8 @@ pub enum ExplorationStep {
     Dive { child_idx: usize },
 }
 
-impl Arena {
-    pub fn new() -> Self {
-        let mut this = Self { nodes: vec![] };
-        this.empty_node();
-        this
-    }
-
-    pub fn get(&self, id: ArenaId) -> &Node {
-        self.nodes[id.0].as_ref().unwrap()
-    }
-
-    pub fn get_mut(&mut self, id: ArenaId) -> &mut Node {
-        self.nodes[id.0].as_mut().unwrap()
-    }
-
-    pub fn empty_node(&mut self) -> ArenaId {
-        let id = ArenaId(self.nodes.len());
-        self.nodes.push(Some(Node::new_empty(id, None)));
-        id
-    }
-
-    pub fn delete(&mut self, id: ArenaId) {
-        self.nodes[id.0] = None;
-    }
-}
-
 impl Node {
-    fn new_empty(arena_idx: ArenaId, parent: Option<ArenaId>) -> Self {
+    fn new_empty(arena_idx: NodeId, parent: Option<NodeId>) -> Self {
         Self {
             sum: RoaringBitmap::new(),
             dirty: false,
@@ -102,7 +72,7 @@ impl Node {
         self.children.is_empty()
     }
 
-    fn recalculate_sum(id: ArenaId, arena: &mut Arena) {
+    fn recalculate_sum(id: NodeId, arena: &mut Nodes) {
         let this = arena.get(id);
         // if !this.dirty {
         //     return;
@@ -116,7 +86,7 @@ impl Node {
         this.sum = this.values.iter().fold(sum, |a, b| a | b);
     }
 
-    fn mark_dirty(id: ArenaId, arena: &mut Arena) {
+    fn mark_dirty(id: NodeId, arena: &mut Nodes) {
         let this = arena.get_mut(id);
         if this.dirty {
             return;
@@ -128,12 +98,12 @@ impl Node {
         }
     }
 
-    fn recompute_and_query(id: ArenaId, query: &Query, arena: &mut Arena) -> RoaringBitmap {
+    fn recompute_and_query(id: NodeId, query: &Query, arena: &mut Nodes) -> RoaringBitmap {
         Self::recalculate_sum(id, arena);
         arena.get(id).query(query, arena)
     }
 
-    fn query(&self, query: &Query, arena: &Arena) -> RoaringBitmap {
+    fn query(&self, query: &Query, arena: &Nodes) -> RoaringBitmap {
         debug_assert!(!self.dirty, "Dirty node was queried");
         match query {
             Query::All => self.sum.clone(),
@@ -465,9 +435,9 @@ impl Node {
     /// Explore the btree from the root to the specified key calling your hook
     /// on every step we take in the tree.
     pub fn explore_toward(
-        this: ArenaId,
+        this: NodeId,
         key: &Key,
-        arena: &Arena,
+        arena: &Nodes,
         mut hook: impl FnMut(&Self, ExplorationStep),
     ) {
         let mut explore = vec![this];
@@ -485,9 +455,9 @@ impl Node {
     /// Explore the btree from the root to the specified key calling your hook
     /// on every step we take in the tree.
     fn explore_toward_mut(
-        this: ArenaId,
+        this: NodeId,
         key: &Key,
-        arena: &mut Arena,
+        arena: &mut Nodes,
         mut hook: impl FnMut(&mut Self, ExplorationStep),
     ) {
         let mut explore = vec![this];
@@ -515,7 +485,7 @@ impl Node {
         tab: &str,
         depth: usize,
         key_formatter: &impl Fn(&Key) -> String,
-        arena: &Arena,
+        arena: &Nodes,
     ) -> String {
         let this_line = format!(
             "{}{}",
@@ -543,76 +513,16 @@ impl Node {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Key {
-    pub bytes: Vec<u8>,
-}
-
-impl From<&str> for Key {
-    fn from(value: &str) -> Self {
-        Key {
-            bytes: value.bytes().collect(),
-        }
-    }
-}
-
-impl From<String> for Key {
-    fn from(value: String) -> Self {
-        Key {
-            bytes: value.into_bytes(),
-        }
-    }
-}
-
-impl From<usize> for Key {
-    fn from(value: usize) -> Self {
-        // By storing the values as big endian bytes we can compare them in
-        // lexicographic order.
-        Key {
-            bytes: value.to_be_bytes().to_vec(),
-        }
-    }
-}
-
-impl fmt::Debug for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self.bytes)?;
-        if let Ok(s) = str::from_utf8(&self.bytes) {
-            write!(f, " ({s})")?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Query {
-    /// Return all the faceted elements.
-    All,
-    /// Return nothing.
-    None,
-    /// Return all the ids that are NOT returned by the inner query.
-    Not(Box<Query>),
-    /// Return all the ids returned by any of the inner requests.
-    Or(Vec<Query>),
-    /// Return the intersection of the ids returned by all requests.
-    And(Vec<Query>),
-    /// Return the ids matching exactly the specified key.
-    Equal(Key),
-    /// Return the ids greater than the specified key.
-    GreaterThan(Bound<Key>),
-    /// Return the ids less than the specified key.
-    LessThan(Bound<Key>),
-    /// Return the ids contained in the range.
-    Range { start: Bound<Key>, end: Bound<Key> },
-}
-
-impl Facet {
+impl BTree {
     /// Initialize a new facet btree on ram
     pub fn on_ram() -> Self {
+        let mut nodes = Nodes::new();
+        let root = nodes.push(Node::default());
+
         Self {
             order: 8,
-            root_idx: ArenaId(0),
-            arena: Arena::new(),
+            root_idx: root,
+            arena: nodes,
         }
     }
 
@@ -651,7 +561,7 @@ impl Facet {
         self.root().keys.is_empty()
     }
 
-    fn recalculate_parents(&mut self, node_idx: ArenaId, parent_idx: Option<ArenaId>) {
+    fn recalculate_parents(&mut self, node_idx: NodeId, parent_idx: Option<NodeId>) {
         // TODO: Unwraps
         self.arena.get_mut(node_idx).parent = parent_idx;
         let children = self.arena.get_mut(node_idx).children.clone();
@@ -708,7 +618,7 @@ impl Facet {
                     match node.parent {
                         Some(idx) => {
                             println!("Have parent");
-                            let right_id = self.arena.empty_node();
+                            let right_id = self.arena.empty_entry();
                             let right_node = self.arena.get_mut(right_id);
                             right_node.keys = right_keys;
                             right_node.values = right_values;
@@ -730,8 +640,8 @@ impl Facet {
                         None => {
                             println!("No parent");
                             let old_root = node.arena_idx;
-                            let new_root = self.arena.empty_node();
-                            let right_id = self.arena.empty_node();
+                            let new_root = self.arena.empty_entry();
+                            let right_id = self.arena.empty_entry();
 
                             self.root_idx = new_root;
 
@@ -963,7 +873,7 @@ mod test {
 
     use super::*;
 
-    impl Facet {
+    impl BTree {
         pub fn ascii_draw(
             &self,
             size_of_keys: usize,
@@ -1030,20 +940,20 @@ mod test {
 
     #[test]
     fn is_empty() {
-        let f = Facet::on_ram();
+        let f = BTree::on_ram();
         assert!(f.is_empty());
     }
 
     #[test]
     fn well_formed_is_empty() {
-        let f = Facet::on_ram();
+        let f = BTree::on_ram();
         f.assert_well_formed().unwrap();
     }
 
-    fn craft_facet_with_inserts() -> Facet {
+    fn craft_facet_with_inserts() -> BTree {
         let formatter =
             |key: &Key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string();
-        let mut f = Facet::on_ram();
+        let mut f = BTree::on_ram();
         f.order = 2;
         f.insert(65.into(), RoaringBitmap::from_iter([0]));
         Node::recalculate_sum(f.root_idx, &mut f.arena);
@@ -1111,40 +1021,40 @@ mod test {
         f
     }
 
-    fn craft_simple_facet() -> Facet {
+    fn craft_simple_facet() -> BTree {
         let n0 = Node {
             parent: None,
             dirty: false,
-            arena_idx: ArenaId(0),
+            arena_idx: NodeId::craft(0),
             sum: RoaringBitmap::from_sorted_iter(0..=8).unwrap(),
             keys: vec![35.into()],
             values: vec![RoaringBitmap::from_iter([3])],
-            children: vec![ArenaId(1), ArenaId(4)],
+            children: vec![NodeId::craft(1), NodeId::craft(4)],
         };
 
         let n1 = Node {
-            parent: Some(ArenaId(0)),
             dirty: false,
-            arena_idx: ArenaId(1),
+            parent: Some(NodeId::craft(0)),
+            arena_idx: NodeId::craft(1),
             sum: RoaringBitmap::from_iter([2, 1, 4, 7, 8]),
             keys: vec![22.into()],
             values: vec![RoaringBitmap::from_iter([2])],
-            children: vec![ArenaId(2), ArenaId(3)],
+            children: vec![NodeId::craft(2), NodeId::craft(3)],
         };
 
         let n2 = Node {
-            parent: Some(ArenaId(1)),
             dirty: false,
-            arena_idx: ArenaId(2),
+            parent: Some(NodeId::craft(1)),
+            arena_idx: NodeId::craft(2),
             sum: RoaringBitmap::from_iter([1, 7]),
             keys: vec![12.into(), 20.into()],
             values: vec![RoaringBitmap::from_iter([7]), RoaringBitmap::from_iter([1])],
             children: Vec::new(),
         };
         let n3 = Node {
-            parent: Some(ArenaId(1)),
             dirty: false,
-            arena_idx: ArenaId(3),
+            parent: Some(NodeId::craft(1)),
+            arena_idx: NodeId::craft(3),
             sum: RoaringBitmap::from_iter([4, 8]),
             keys: vec![24.into(), 25.into()],
             values: vec![RoaringBitmap::from_iter([8]), RoaringBitmap::from_iter([4])],
@@ -1152,19 +1062,19 @@ mod test {
         };
 
         let n4 = Node {
-            parent: Some(ArenaId(0)),
             dirty: false,
-            arena_idx: ArenaId(4),
+            parent: Some(NodeId::craft(0)),
+            arena_idx: NodeId::craft(4),
             sum: RoaringBitmap::from_iter([6, 5, 0]),
             keys: vec![45.into()],
             values: vec![RoaringBitmap::from_iter([6])],
-            children: vec![ArenaId(5), ArenaId(6)],
+            children: vec![NodeId::craft(5), NodeId::craft(6)],
         };
 
         let n5 = Node {
-            parent: Some(ArenaId(4)),
             dirty: false,
-            arena_idx: ArenaId(5),
+            parent: Some(NodeId::craft(4)),
+            arena_idx: NodeId::craft(5),
             sum: RoaringBitmap::from_iter([5]),
             keys: vec![41.into()],
             values: vec![RoaringBitmap::from_iter([5])],
@@ -1172,29 +1082,27 @@ mod test {
         };
 
         let n6 = Node {
-            parent: Some(ArenaId(4)),
             dirty: false,
-            arena_idx: ArenaId(6),
+            parent: Some(NodeId::craft(4)),
+            arena_idx: NodeId::craft(6),
             sum: RoaringBitmap::from_iter([0]),
             keys: vec![65.into()],
             values: vec![RoaringBitmap::from_iter([0])],
             children: Vec::new(),
         };
 
-        Facet {
+        BTree {
             order: 3,
-            root_idx: ArenaId(0),
-            arena: Arena {
-                nodes: vec![
-                    Some(n0),
-                    Some(n1),
-                    Some(n2),
-                    Some(n3),
-                    Some(n4),
-                    Some(n5),
-                    Some(n6),
-                ],
-            },
+            root_idx: NodeId::craft(0),
+            arena: Arena::craft_from(vec![
+                Some(n0),
+                Some(n1),
+                Some(n2),
+                Some(n3),
+                Some(n4),
+                Some(n5),
+                Some(n6),
+            ]),
         }
     }
 
@@ -1211,7 +1119,7 @@ mod test {
 
     #[test]
     fn depth() {
-        assert_eq!(Facet::on_ram().depth(), 1);
+        assert_eq!(BTree::on_ram().depth(), 1);
         assert_eq!(craft_simple_facet().depth(), 3);
     }
 
@@ -1247,7 +1155,7 @@ mod test {
     #[test]
     fn well_formed_empty_non_root_node() {
         let mut f = craft_simple_facet();
-        f.arena.get_mut(ArenaId(1)).keys.clear();
+        f.arena.get_mut(NodeId::craft(1)).keys.clear();
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because empty node which is illegal except for the root node if the whole btree is empty.\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of keys (0) and values (1) do not match and are supposed to be equal\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of children is supposed to be equal to the number of keys (0) + 1 but instead got 2 children.");
     }
@@ -1255,7 +1163,7 @@ mod test {
     #[test]
     fn well_formed_mismatch_nb_keys_values() {
         let mut f = craft_simple_facet();
-        f.arena.get_mut(ArenaId(1)).values.pop();
+        f.arena.get_mut(NodeId::craft(1)).values.pop();
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"
             Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of keys (1) and values (0) do not match and are supposed to be equal
@@ -1266,7 +1174,7 @@ mod test {
     #[test]
     fn well_formed_mismatch_nb_children() {
         let mut f = craft_simple_facet();
-        f.arena.get_mut(ArenaId(1)).children.pop();
+        f.arena.get_mut(NodeId::craft(1)).children.pop();
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"
             Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of children is supposed to be equal to the number of keys (1) + 1 but instead got 1 children.
@@ -1277,7 +1185,7 @@ mod test {
     #[test]
     fn well_formed_unknown_value_in_child() {
         let mut f = craft_simple_facet();
-        f.arena.get_mut(ArenaId(1)).sum.insert(1234);
+        f.arena.get_mut(NodeId::craft(1)).sum.insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because values RoaringBitmap<[1234]> are contained in child but not in parent RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because values RoaringBitmap<[1234]> are contained in the value sum of a node, but not in its value or children");
     }
@@ -1285,7 +1193,7 @@ mod test {
     #[test]
     fn well_formed_unknown_sum_node() {
         let mut f = craft_simple_facet();
-        f.arena.get_mut(ArenaId(0)).sum.insert(1234);
+        f.arena.get_mut(NodeId::craft(0)).sum.insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because values RoaringBitmap<[1234]> are contained in the value sum of a node, but not in its value or children");
     }
@@ -1293,7 +1201,7 @@ mod test {
     #[test]
     fn well_formed_unknown_direct_value_node() {
         let mut f = craft_simple_facet();
-        f.arena.get_mut(ArenaId(0)).values[0].insert(1234);
+        f.arena.get_mut(NodeId::craft(0)).values[0].insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
         insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because key [0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#) contains the following values RoaringBitmap<[1234]> that are not contained in the sum of the node RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>");
     }
@@ -1671,6 +1579,7 @@ mod test {
         insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
     }
 
+    use facets::Arena;
     use proptest::prelude::*;
     proptest! {
         #[test]

@@ -297,6 +297,7 @@ dependencies = [
 name = "saute"
 version = "0.1.0"
 dependencies = [
+ "facets",
  "roaring",
  "thiserror",
 ]

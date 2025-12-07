@@ -1,5 +1,5 @@
 use core::fmt;
-use std::ops::Bound;
+use std::{marker::PhantomData, ops::Bound};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Key {
@@ -62,4 +62,75 @@ pub enum Query {
     LessThan(Bound<Key>),
     /// Return the ids contained in the range.
     Range { start: Bound<Key>, end: Bound<Key> },
+}
+
+#[derive(Default, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ArenaId<T>(usize, PhantomData<T>);
+
+impl<T> ArenaId<T> {
+    /// Ideally, you should craft the arena id yourself and allocate new node
+    /// with the arena.
+    pub fn craft(n: usize) -> Self {
+        Self(n, PhantomData)
+    }
+}
+
+impl<T> Clone for ArenaId<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for ArenaId<T> {}
+
+pub struct Arena<Entry> {
+    nodes: Vec<Option<Entry>>,
+}
+
+impl<T> Default for Arena<T> {
+    fn default() -> Self {
+        Self { nodes: Vec::new() }
+    }
+}
+
+impl<Entry: Default> Arena<Entry> {
+    pub fn empty_entry(&mut self) -> ArenaId<Entry> {
+        self.push(Entry::default())
+    }
+}
+
+impl<Entry> Arena<Entry> {
+    pub fn new() -> Self {
+        Self { nodes: vec![] }
+    }
+
+    pub fn push(&mut self, value: Entry) -> ArenaId<Entry> {
+        let id = self.nodes.len();
+        self.nodes.push(Some(value));
+        ArenaId(id, PhantomData)
+    }
+
+    pub fn get(&self, id: ArenaId<Entry>) -> &Entry {
+        self.nodes[id.0].as_ref().unwrap()
+    }
+
+    pub fn get_mut(&mut self, id: ArenaId<Entry>) -> &mut Entry {
+        self.nodes[id.0].as_mut().unwrap()
+    }
+
+    pub fn delete(&mut self, id: ArenaId<Entry>) {
+        self.nodes[id.0] = None;
+    }
+
+    pub fn craft_from(nodes: Vec<Option<Entry>>) -> Self {
+        Self { nodes }
+    }
+}
+
+impl<Entry> std::ops::Index<ArenaId<Entry>> for Arena<Entry> {
+    type Output = Entry;
+
+    fn index(&self, index: ArenaId<Entry>) -> &Self::Output {
+        self.get(index)
+    }
 }

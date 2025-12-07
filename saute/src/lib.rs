@@ -1,5 +1,6 @@
 use std::{fmt, marker::PhantomData};
 
+use facets::{Arena, ArenaId};
 use roaring::RoaringBitmap;
 
 /// The skip list.
@@ -99,59 +100,6 @@ type NodeId = ArenaId<(Key, RoaringBitmap)>;
 
 type LevelEntries = Arena<LevelEntry>;
 type LevelId = ArenaId<LevelEntry>;
-
-#[derive(Default, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-struct ArenaId<T>(usize, PhantomData<T>);
-
-impl<T> Clone for ArenaId<T> {
-    fn clone(&self) -> Self {
-        Self(self.0, PhantomData)
-    }
-}
-impl<T> Copy for ArenaId<T> {}
-
-struct Arena<Entry> {
-    nodes: Vec<Option<Entry>>,
-}
-
-impl<T> Default for Arena<T> {
-    fn default() -> Self {
-        Self { nodes: Vec::new() }
-    }
-}
-
-impl<Entry> Arena<Entry> {
-    pub fn new() -> Self {
-        Self { nodes: vec![] }
-    }
-
-    pub fn push(&mut self, value: Entry) -> ArenaId<Entry> {
-        let id = self.nodes.len();
-        self.nodes.push(Some(value));
-        ArenaId(id, PhantomData)
-    }
-
-    pub fn get(&self, id: ArenaId<Entry>) -> &Entry {
-        self.nodes[id.0].as_ref().unwrap()
-    }
-
-    pub fn get_mut(&mut self, id: ArenaId<Entry>) -> &mut Entry {
-        self.nodes[id.0].as_mut().unwrap()
-    }
-
-    pub fn delete(&mut self, id: ArenaId<Entry>) {
-        self.nodes[id.0] = None;
-    }
-}
-
-impl<Entry> std::ops::Index<ArenaId<Entry>> for Arena<Entry> {
-    type Output = Entry;
-
-    fn index(&self, index: ArenaId<Entry>) -> &Self::Output {
-        self.get(index)
-    }
-}
 
 #[cfg(test)]
 mod test {}
