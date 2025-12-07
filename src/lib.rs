@@ -1,5 +1,5 @@
 use core::fmt;
-use std::ops::Bound;
+use std::{fmt::format, ops::Bound};
 
 use roaring::RoaringBitmap;
 
@@ -22,6 +22,7 @@ struct Arena {
 pub struct Node {
     /// The sums of all values contained in this node and all its children
     sum: RoaringBitmap,
+    dirty: bool,
     /// Contains all the keys in this node.
     /// constraints: we have at most `order` keys and at min `order / 2` keys
     /// except for the root and leaves.
@@ -87,6 +88,7 @@ impl Node {
     fn new_empty(arena_idx: ArenaId, parent: Option<ArenaId>) -> Self {
         Self {
             sum: RoaringBitmap::new(),
+            dirty: false,
             keys: vec![],
             values: vec![],
             children: vec![],
@@ -100,7 +102,39 @@ impl Node {
         self.children.is_empty()
     }
 
+    fn recalculate_sum(id: ArenaId, arena: &mut Arena) {
+        let this = arena.get(id);
+        // if !this.dirty {
+        //     return;
+        // };
+        let mut sum = RoaringBitmap::new();
+        for &child in &this.children.clone() {
+            Self::recalculate_sum(child, arena);
+            sum |= arena.get(child).sum.clone();
+        }
+        let this = arena.get_mut(id);
+        this.sum = this.values.iter().fold(sum, |a, b| a | b);
+    }
+
+    fn mark_dirty(id: ArenaId, arena: &mut Arena) {
+        let this = arena.get_mut(id);
+        if this.dirty {
+            return;
+        }
+        this.dirty = true;
+        match this.parent {
+            Some(parent) => Self::mark_dirty(parent, arena),
+            None => (),
+        }
+    }
+
+    fn recompute_and_query(id: ArenaId, query: &Query, arena: &mut Arena) -> RoaringBitmap {
+        Self::recalculate_sum(id, arena);
+        arena.get(id).query(query, arena)
+    }
+
     fn query(&self, query: &Query, arena: &Arena) -> RoaringBitmap {
+        debug_assert!(!self.dirty, "Dirty node was queried");
         match query {
             Query::All => self.sum.clone(),
             Query::None => RoaringBitmap::new(),
@@ -417,6 +451,7 @@ impl Node {
         // if we reach this point it means our key is > to all the
         // key in the node
         if !self.children.is_empty() {
+            println!("Children not empty: {}", self.children.len());
             ExplorationStep::Dive {
                 child_idx: self.children.len() - 1,
             }
@@ -628,6 +663,7 @@ impl Facet {
     pub fn insert(&mut self, key: Key, value: RoaringBitmap) {
         let mut thing = None;
         Node::explore_toward(self.root_idx, &key, &self.arena, |n, step| {
+            dbg!(step);
             match step {
                 ExplorationStep::FinalExact { .. } | ExplorationStep::FinalMiss { .. } => {
                     thing = Some((n.arena_idx, step));
@@ -640,11 +676,7 @@ impl Facet {
         match step {
             ExplorationStep::FinalExact { key_idx } => {
                 node.values[key_idx] |= &value;
-                node.sum |= &value;
-                while let Some(id) = node.parent {
-                    node = self.arena.get_mut(id);
-                    node.sum |= &value;
-                }
+                node.dirty = true;
             }
             ExplorationStep::FinalMiss { key_idx } => {
                 let mut key_idx = key_idx;
@@ -653,6 +685,7 @@ impl Facet {
                 while node.keys.len() >= self.order {
                     node.keys.insert(key_idx, key.clone());
                     node.values.insert(key_idx, value.clone());
+                    node.dirty = true;
 
                     let median_idx = self.order / 2;
                     key = node.keys[median_idx].clone();
@@ -661,33 +694,41 @@ impl Facet {
                     let left_keys: Vec<_> = node.keys.iter().cloned().take(median_idx).collect();
                     let left_values: Vec<_> =
                         node.values.iter().cloned().take(median_idx).collect();
+                    let left_children = node.children.iter().cloned().take(median_idx).collect();
 
                     let right_keys: Vec<_> =
                         node.keys.iter().cloned().skip(median_idx + 1).collect();
                     let right_values: Vec<_> =
                         node.values.iter().cloned().skip(median_idx + 1).collect();
+                    let right_children = node.children.iter().cloned().skip(median_idx).collect();
 
                     node.keys = left_keys;
                     node.values = left_values;
 
                     match node.parent {
                         Some(idx) => {
+                            println!("Have parent");
                             let right_id = self.arena.empty_node();
                             let right_node = self.arena.get_mut(right_id);
                             right_node.keys = right_keys;
                             right_node.values = right_values;
+                            right_node.children = right_children;
                             right_node.parent = Some(idx);
+                            right_node.dirty = true;
                             node = self.arena.get_mut(idx);
                             node.children.push(right_id);
                             key_idx = match node.next_step_toward(&key) {
                                 ExplorationStep::FinalExact { key_idx: _ } => {
                                     unreachable!("Oh no!")
                                 }
-                                ExplorationStep::FinalMiss { key_idx: idx }
-                                | ExplorationStep::Dive { child_idx: idx } => idx,
+                                ExplorationStep::FinalMiss { key_idx: idx } => {
+                                    unreachable!("Oh no!")
+                                }
+                                ExplorationStep::Dive { child_idx: idx } => idx.saturating_sub(1),
                             };
                         }
                         None => {
+                            println!("No parent");
                             let old_root = node.arena_idx;
                             let new_root = self.arena.empty_node();
                             let right_id = self.arena.empty_node();
@@ -695,12 +736,16 @@ impl Facet {
                             self.root_idx = new_root;
 
                             let left_node = self.arena.get_mut(old_root);
+                            left_node.dirty = true;
+                            left_node.children = left_children;
                             left_node.parent = Some(new_root);
 
                             let right_node = self.arena.get_mut(right_id);
                             right_node.keys = right_keys;
                             right_node.values = right_values;
                             right_node.parent = Some(new_root);
+                            right_node.children = right_children;
+                            right_node.dirty = true;
 
                             self.root_mut().children.push(old_root);
                             self.root_mut().children.push(right_id);
@@ -711,13 +756,10 @@ impl Facet {
                         }
                     };
                 }
+
                 node.keys.insert(key_idx, key);
                 node.values.insert(key_idx, value.clone());
-                node.sum |= &value;
-                while let Some(id) = node.parent {
-                    node = self.arena.get_mut(id);
-                    node.sum |= &value;
-                }
+                node.dirty = true;
             }
             ExplorationStep::Dive { child_idx } => unreachable!("Oh no!"),
         }
@@ -999,23 +1041,80 @@ mod test {
     }
 
     fn craft_facet_with_inserts() -> Facet {
+        let formatter =
+            |key: &Key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string();
         let mut f = Facet::on_ram();
+        f.order = 2;
         f.insert(65.into(), RoaringBitmap::from_iter([0]));
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
+        let s = f
+            .arena
+            .get(f.root_idx)
+            .better_ascii_draw("\t", 0, &formatter, &f.arena);
+        println!("{s}");
         f.insert(20.into(), RoaringBitmap::from_iter([1]));
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
+        let s = f
+            .arena
+            .get(f.root_idx)
+            .better_ascii_draw("\t", 0, &formatter, &f.arena);
+        println!("{s}");
         f.insert(22.into(), RoaringBitmap::from_iter([2]));
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
+        let s = f
+            .arena
+            .get(f.root_idx)
+            .better_ascii_draw("\t", 0, &formatter, &f.arena);
+        println!("{s}");
         f.insert(35.into(), RoaringBitmap::from_iter([3]));
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
+        let s = f
+            .arena
+            .get(f.root_idx)
+            .better_ascii_draw("\t", 0, &formatter, &f.arena);
+        println!("{s}");
         f.insert(25.into(), RoaringBitmap::from_iter([4]));
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
+        let s = f
+            .arena
+            .get(f.root_idx)
+            .better_ascii_draw("\t", 0, &formatter, &f.arena);
+        println!("{s}");
         f.insert(41.into(), RoaringBitmap::from_iter([5]));
-        f.insert(48.into(), RoaringBitmap::from_iter([6]));
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
+        let s = f
+            .arena
+            .get(f.root_idx)
+            .better_ascii_draw("\t", 0, &formatter, &f.arena);
+        println!("{s}");
+        f.insert(45.into(), RoaringBitmap::from_iter([6]));
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
+        let s = f
+            .arena
+            .get(f.root_idx)
+            .better_ascii_draw("\t", 0, &formatter, &f.arena);
+        println!("{s}");
         f.insert(12.into(), RoaringBitmap::from_iter([7]));
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
+        let s = f
+            .arena
+            .get(f.root_idx)
+            .better_ascii_draw("\t", 0, &formatter, &f.arena);
+        println!("{s}");
         f.insert(24.into(), RoaringBitmap::from_iter([8]));
-
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
+        let s = f
+            .arena
+            .get(f.root_idx)
+            .better_ascii_draw("\t", 0, &formatter, &f.arena);
+        println!("{s}");
         f
     }
 
     fn craft_simple_facet() -> Facet {
         let n0 = Node {
             parent: None,
+            dirty: false,
             arena_idx: ArenaId(0),
             sum: RoaringBitmap::from_sorted_iter(0..=8).unwrap(),
             keys: vec![35.into()],
@@ -1025,6 +1124,7 @@ mod test {
 
         let n1 = Node {
             parent: Some(ArenaId(0)),
+            dirty: false,
             arena_idx: ArenaId(1),
             sum: RoaringBitmap::from_iter([2, 1, 4, 7, 8]),
             keys: vec![22.into()],
@@ -1034,6 +1134,7 @@ mod test {
 
         let n2 = Node {
             parent: Some(ArenaId(1)),
+            dirty: false,
             arena_idx: ArenaId(2),
             sum: RoaringBitmap::from_iter([1, 7]),
             keys: vec![12.into(), 20.into()],
@@ -1042,6 +1143,7 @@ mod test {
         };
         let n3 = Node {
             parent: Some(ArenaId(1)),
+            dirty: false,
             arena_idx: ArenaId(3),
             sum: RoaringBitmap::from_iter([4, 8]),
             keys: vec![24.into(), 25.into()],
@@ -1051,6 +1153,7 @@ mod test {
 
         let n4 = Node {
             parent: Some(ArenaId(0)),
+            dirty: false,
             arena_idx: ArenaId(4),
             sum: RoaringBitmap::from_iter([6, 5, 0]),
             keys: vec![45.into()],
@@ -1060,6 +1163,7 @@ mod test {
 
         let n5 = Node {
             parent: Some(ArenaId(4)),
+            dirty: false,
             arena_idx: ArenaId(5),
             sum: RoaringBitmap::from_iter([5]),
             keys: vec![41.into()],
@@ -1069,6 +1173,7 @@ mod test {
 
         let n6 = Node {
             parent: Some(ArenaId(4)),
+            dirty: false,
             arena_idx: ArenaId(6),
             sum: RoaringBitmap::from_iter([0]),
             keys: vec![65.into()],
