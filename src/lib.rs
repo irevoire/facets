@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{marker::PhantomData, ops::Bound};
+use std::{fmt::Debug, marker::PhantomData, ops::Bound};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Key {
@@ -64,9 +64,15 @@ pub enum Query {
     Range { start: Bound<Key>, end: Bound<Key> },
 }
 
-#[derive(Default, PartialEq, Eq, Hash)]
+#[derive(Default, Hash)]
 #[repr(transparent)]
 pub struct ArenaId<T>(usize, PhantomData<T>);
+
+impl<T> Debug for ArenaId<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ArenaId").field(&self.0).finish()
+    }
+}
 
 impl<T> ArenaId<T> {
     /// Ideally, you should craft the arena id yourself and allocate new node
@@ -111,7 +117,9 @@ impl<Entry> Arena<Entry> {
     }
 
     pub fn get(&self, id: ArenaId<Entry>) -> &Entry {
-        self.nodes[id.0].as_ref().unwrap()
+        self.nodes[id.0]
+            .as_ref()
+            .expect(&format!("{} does not exist", id.0))
     }
 
     pub fn get_mut(&mut self, id: ArenaId<Entry>) -> &mut Entry {

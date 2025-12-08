@@ -1,5 +1,5 @@
 use core::fmt;
-use std::ops::Bound;
+use std::{fmt::Display, ops::Bound};
 
 use facets::{Key, Query};
 use roaring::RoaringBitmap;
@@ -14,7 +14,7 @@ pub struct BTree {
 type Nodes = facets::Arena<Node>;
 type NodeId = facets::ArenaId<Node>;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Node {
     /// The sums of all values contained in this node and all its children
     sum: RoaringBitmap,
@@ -55,21 +55,42 @@ pub enum ExplorationStep {
 }
 
 impl Node {
-    fn new_empty(arena_idx: NodeId, parent: Option<NodeId>) -> Self {
-        Self {
-            sum: RoaringBitmap::new(),
-            dirty: false,
-            keys: vec![],
-            values: vec![],
-            children: vec![],
-            arena_idx,
-            parent,
-        }
-    }
+    pub fn split_at(
+        this: NodeId,
+        idx: usize,
+        arena: &mut Nodes,
+    ) -> (Key, RoaringBitmap, NodeId, NodeId) {
+        let (key, value, keys, values, children) = {
+            let this = arena.get(this);
+            let key = this.keys[idx].clone();
+            let value = this.values[idx].clone();
+            (
+                key,
+                value,
+                this.keys.clone(),
+                this.values.clone(),
+                this.children.clone(),
+            )
+        };
 
-    #[inline]
-    fn is_leaf(&self) -> bool {
-        self.children.is_empty()
+        let left_id = arena.empty_entry();
+        let right_id = arena.empty_entry();
+
+        let left_node = arena.get_mut(left_id);
+        left_node.arena_idx = left_id;
+        left_node.keys = keys.iter().take(idx).cloned().collect();
+        left_node.values = values.iter().take(idx).cloned().collect();
+        left_node.children = children.iter().take(idx + 1).cloned().collect();
+        left_node.dirty = true;
+
+        let right_node = arena.get_mut(right_id);
+        right_node.arena_idx = right_id;
+        right_node.keys = keys.iter().skip(idx + 1).cloned().collect();
+        right_node.values = values.iter().skip(idx + 1).cloned().collect();
+        right_node.children = children.iter().skip(idx + 1).cloned().collect();
+        right_node.dirty = true;
+
+        (key, value, left_id, right_id)
     }
 
     fn recalculate_sum(id: NodeId, arena: &mut Nodes) {
@@ -86,6 +107,7 @@ impl Node {
         this.sum = this.values.iter().fold(sum, |a, b| a | b);
     }
 
+    #[allow(unused)]
     fn mark_dirty(id: NodeId, arena: &mut Nodes) {
         let this = arena.get_mut(id);
         if this.dirty {
@@ -98,6 +120,7 @@ impl Node {
         }
     }
 
+    #[allow(unused)]
     fn recompute_and_query(id: NodeId, query: &Query, arena: &mut Nodes) -> RoaringBitmap {
         Self::recalculate_sum(id, arena);
         arena.get(id).query(query, arena)
@@ -421,7 +444,6 @@ impl Node {
         // if we reach this point it means our key is > to all the
         // key in the node
         if !self.children.is_empty() {
-            println!("Children not empty: {}", self.children.len());
             ExplorationStep::Dive {
                 child_idx: self.children.len() - 1,
             }
@@ -454,6 +476,7 @@ impl Node {
 
     /// Explore the btree from the root to the specified key calling your hook
     /// on every step we take in the tree.
+    #[allow(unused)]
     fn explore_toward_mut(
         this: NodeId,
         key: &Key,
@@ -472,34 +495,17 @@ impl Node {
         }
     }
 
-    /// 35
-    ///     22
-    ///         12, 20
-    ///         24, 25
-    ///     45
-    ///         41
-    ///         65
-
-    pub fn better_ascii_draw(
+    #[cfg(test)]
+    fn better_ascii_draw(
         &self,
         tab: &str,
         depth: usize,
         key_formatter: &impl Fn(&Key) -> String,
         arena: &Nodes,
     ) -> String {
-        let this_line = format!(
-            "{}{}",
-            tab.repeat(depth),
-            self.keys
-                .iter()
-                .map(key_formatter)
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
         format!(
-            "{this_line}: v:{:?} s:{:?}\n{}",
-            self.values,
-            self.sum,
+            "{}{self}\n{}",
+            tab.repeat(depth),
             self.children
                 .iter()
                 .map(|child| {
@@ -510,6 +516,41 @@ impl Node {
                 .collect::<Vec<_>>()
                 .join(""),
         )
+    }
+}
+
+impl Display for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let key_formatter =
+            |key: &Key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string();
+        let rb_formatter = |rb: &RoaringBitmap| {
+            rb.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join("|")
+        };
+        let node_string: String = format!(
+            "Node: {{{}}} (sum: {}) id: {:?}",
+            self.keys
+                .iter()
+                .enumerate()
+                .map(|(idx, key)| {
+                    format!(
+                        "{}:{}",
+                        key_formatter(&key),
+                        rb_formatter(&self.values[idx])
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.sum
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.arena_idx,
+        );
+        write!(f, "{node_string}")
     }
 }
 
@@ -547,6 +588,7 @@ impl BTree {
         self.arena.get(self.root_idx)
     }
 
+    #[allow(unused)]
     fn root_mut(&mut self) -> &mut Node {
         self.arena.get_mut(self.root_idx)
     }
@@ -561,117 +603,100 @@ impl BTree {
         self.root().keys.is_empty()
     }
 
-    fn recalculate_parents(&mut self, node_idx: NodeId, parent_idx: Option<NodeId>) {
-        // TODO: Unwraps
-        self.arena.get_mut(node_idx).parent = parent_idx;
-        let children = self.arena.get_mut(node_idx).children.clone();
-        for child_idx in children {
-            self.recalculate_parents(child_idx, Some(node_idx));
-        }
-    }
-
     pub fn insert(&mut self, key: Key, value: RoaringBitmap) {
-        let mut thing = None;
+        let mut insertion_target = None;
         Node::explore_toward(self.root_idx, &key, &self.arena, |n, step| {
-            dbg!(step);
             match step {
                 ExplorationStep::FinalExact { .. } | ExplorationStep::FinalMiss { .. } => {
-                    thing = Some((n.arena_idx, step));
+                    insertion_target = Some((n.arena_idx, step));
                 }
                 ExplorationStep::Dive { .. } => { /* do nothing */ }
             }
         });
-        let (id, step) = thing.unwrap();
-        let mut node = self.arena.get_mut(id);
+        let (id, step) = insertion_target.unwrap();
         match step {
+            ExplorationStep::Dive { .. } => {
+                let node = self.arena.get(id);
+                unreachable!("Should not happen, [{node}] is not a leaf node!",)
+            }
             ExplorationStep::FinalExact { key_idx } => {
+                let node = self.arena.get_mut(id);
                 node.values[key_idx] |= &value;
                 node.dirty = true;
             }
             ExplorationStep::FinalMiss { key_idx } => {
-                let mut key_idx = key_idx;
-                let mut key = key;
-                let mut value = value;
-                while node.keys.len() >= self.order {
-                    node.keys.insert(key_idx, key.clone());
-                    node.values.insert(key_idx, value.clone());
-                    node.dirty = true;
+                let mut loop_idx = key_idx;
+                let mut loop_key = key;
+                let mut loop_value = value;
+                let mut loop_node_id = id;
+                let mut loop_children = vec![];
+                loop {
+                    // First, we insert the key/value pair into the node, and reconnect any dangling children
+                    {
+                        let node = self.arena.get_mut(loop_node_id);
+                        node.keys.insert(loop_idx, loop_key.clone());
+                        node.values.insert(loop_idx, loop_value.clone());
+                        if node.children.is_empty() {
+                            node.children = loop_children;
+                        } else {
+                            node.children = node
+                                .children
+                                .iter()
+                                .take(loop_idx)
+                                .chain(loop_children.iter())
+                                .chain(node.children.iter().skip(loop_idx + 1))
+                                .cloned()
+                                .collect();
+                        }
+                        node.dirty = true;
+                    }
 
-                    let median_idx = self.order / 2;
-                    key = node.keys[median_idx].clone();
-                    value = node.values[median_idx].clone();
+                    // If we're not oversized, we're done and we can exit here
+                    if self.arena.get(loop_node_id).keys.len() <= self.order {
+                        break;
+                    }
 
-                    let left_keys: Vec<_> = node.keys.iter().cloned().take(median_idx).collect();
-                    let left_values: Vec<_> =
-                        node.values.iter().cloned().take(median_idx).collect();
-                    let left_children = node.children.iter().cloned().take(median_idx).collect();
+                    // Otherwise we need to split the node at the midpoint
+                    // This gives us the median key/value pair, as well as two new nodes for the left and right side
+                    let (key, value, left, right) =
+                        { Node::split_at(loop_node_id, self.order / 2, &mut self.arena) };
 
-                    let right_keys: Vec<_> =
-                        node.keys.iter().cloned().skip(median_idx + 1).collect();
-                    let right_values: Vec<_> =
-                        node.values.iter().cloned().skip(median_idx + 1).collect();
-                    let right_children = node.children.iter().cloned().skip(median_idx).collect();
+                    // These become the key/value pair and the dangline children we'll need to reconnect
+                    loop_key = key;
+                    loop_value = value;
+                    loop_children = vec![left, right];
 
-                    node.keys = left_keys;
-                    node.values = left_values;
-
-                    match node.parent {
-                        Some(idx) => {
-                            println!("Have parent");
-                            let right_id = self.arena.empty_entry();
-                            let right_node = self.arena.get_mut(right_id);
-                            right_node.keys = right_keys;
-                            right_node.values = right_values;
-                            right_node.children = right_children;
-                            right_node.parent = Some(idx);
-                            right_node.dirty = true;
-                            node = self.arena.get_mut(idx);
-                            node.children.push(right_id);
-                            key_idx = match node.next_step_toward(&key) {
-                                ExplorationStep::FinalExact { key_idx: _ } => {
-                                    unreachable!("Oh no!")
-                                }
-                                ExplorationStep::FinalMiss { key_idx: idx } => {
-                                    unreachable!("Oh no!")
-                                }
-                                ExplorationStep::Dive { child_idx: idx } => idx.saturating_sub(1),
+                    // Now we find the node we're going to insert these new values into
+                    let next_node_id = match self.arena.get(loop_node_id).parent {
+                        Some(parent) => {
+                            let node = self.arena.get(parent);
+                            let ExplorationStep::Dive { child_idx } =
+                                node.next_step_toward(&loop_key)
+                            else {
+                                unreachable!("This shouldn't happen");
                             };
+                            loop_idx = child_idx;
+                            parent
                         }
                         None => {
-                            println!("No parent");
-                            let old_root = node.arena_idx;
-                            let new_root = self.arena.empty_entry();
-                            let right_id = self.arena.empty_entry();
-
-                            self.root_idx = new_root;
-
-                            let left_node = self.arena.get_mut(old_root);
-                            left_node.dirty = true;
-                            left_node.children = left_children;
-                            left_node.parent = Some(new_root);
-
-                            let right_node = self.arena.get_mut(right_id);
-                            right_node.keys = right_keys;
-                            right_node.values = right_values;
-                            right_node.parent = Some(new_root);
-                            right_node.children = right_children;
-                            right_node.dirty = true;
-
-                            self.root_mut().children.push(old_root);
-                            self.root_mut().children.push(right_id);
-
-                            self.root_mut().keys.push(key);
-                            self.root_mut().values.push(value);
-                            return;
+                            self.root_idx = self.arena.empty_entry();
+                            self.arena.get_mut(self.root_idx).arena_idx = self.root_idx;
+                            loop_idx = 0;
+                            self.root_idx
                         }
                     };
-                }
 
-                node.keys.insert(key_idx, key);
-                node.values.insert(key_idx, value.clone());
-                node.dirty = true;
+                    {
+                        self.arena.get_mut(left).parent = Some(next_node_id);
+                        self.arena.get_mut(right).parent = Some(next_node_id);
+                    }
+
+                    // The old node is dead, remove it
+
+                    self.arena.delete(loop_node_id);
+                    loop_node_id = next_node_id;
+                }
             }
-            ExplorationStep::Dive { child_idx } => unreachable!("Oh no!"),
         }
     }
 
@@ -951,73 +976,32 @@ mod test {
     }
 
     fn craft_facet_with_inserts() -> BTree {
+        let data = vec![
+            (65, 0),
+            (20, 1),
+            (22, 2),
+            (35, 3),
+            (25, 4),
+            (41, 5),
+            (45, 6),
+            (12, 7),
+            (24, 8),
+        ];
+
         let formatter =
             |key: &Key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string();
         let mut f = BTree::on_ram();
         f.order = 2;
-        f.insert(65.into(), RoaringBitmap::from_iter([0]));
-        Node::recalculate_sum(f.root_idx, &mut f.arena);
-        let s = f
-            .arena
-            .get(f.root_idx)
-            .better_ascii_draw("\t", 0, &formatter, &f.arena);
-        println!("{s}");
-        f.insert(20.into(), RoaringBitmap::from_iter([1]));
-        Node::recalculate_sum(f.root_idx, &mut f.arena);
-        let s = f
-            .arena
-            .get(f.root_idx)
-            .better_ascii_draw("\t", 0, &formatter, &f.arena);
-        println!("{s}");
-        f.insert(22.into(), RoaringBitmap::from_iter([2]));
-        Node::recalculate_sum(f.root_idx, &mut f.arena);
-        let s = f
-            .arena
-            .get(f.root_idx)
-            .better_ascii_draw("\t", 0, &formatter, &f.arena);
-        println!("{s}");
-        f.insert(35.into(), RoaringBitmap::from_iter([3]));
-        Node::recalculate_sum(f.root_idx, &mut f.arena);
-        let s = f
-            .arena
-            .get(f.root_idx)
-            .better_ascii_draw("\t", 0, &formatter, &f.arena);
-        println!("{s}");
-        f.insert(25.into(), RoaringBitmap::from_iter([4]));
-        Node::recalculate_sum(f.root_idx, &mut f.arena);
-        let s = f
-            .arena
-            .get(f.root_idx)
-            .better_ascii_draw("\t", 0, &formatter, &f.arena);
-        println!("{s}");
-        f.insert(41.into(), RoaringBitmap::from_iter([5]));
-        Node::recalculate_sum(f.root_idx, &mut f.arena);
-        let s = f
-            .arena
-            .get(f.root_idx)
-            .better_ascii_draw("\t", 0, &formatter, &f.arena);
-        println!("{s}");
-        f.insert(45.into(), RoaringBitmap::from_iter([6]));
-        Node::recalculate_sum(f.root_idx, &mut f.arena);
-        let s = f
-            .arena
-            .get(f.root_idx)
-            .better_ascii_draw("\t", 0, &formatter, &f.arena);
-        println!("{s}");
-        f.insert(12.into(), RoaringBitmap::from_iter([7]));
-        Node::recalculate_sum(f.root_idx, &mut f.arena);
-        let s = f
-            .arena
-            .get(f.root_idx)
-            .better_ascii_draw("\t", 0, &formatter, &f.arena);
-        println!("{s}");
-        f.insert(24.into(), RoaringBitmap::from_iter([8]));
-        Node::recalculate_sum(f.root_idx, &mut f.arena);
-        let s = f
-            .arena
-            .get(f.root_idx)
-            .better_ascii_draw("\t", 0, &formatter, &f.arena);
-        println!("{s}");
+
+        for (key, value) in data {
+            f.insert(key.into(), RoaringBitmap::from_iter([value]));
+            Node::recalculate_sum(f.root_idx, &mut f.arena);
+            let s = f
+                .arena
+                .get(f.root_idx)
+                .better_ascii_draw("\t", 0, &formatter, &f.arena);
+            println!("{s}");
+        }
         f
     }
 
