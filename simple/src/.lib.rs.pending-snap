@@ -1,0 +1,84 @@
+{"run_id":"1765155254-979910000","line":169,"new":{"module_name":"simple__test","snapshot_name":"query_or-2","metadata":{"source":"simple/src/lib.rs","assertion_line":169,"expression":"r"},"snapshot":"RoaringBitmap<[0, 5, 6]>"},"old":{"module_name":"simple__test","metadata":{},"snapshot":"RoaringBitmap<[0, 1, 2, 4, 5, 6, 7, 8]>"}}
+{"run_id":"1765155254-979910000","line":403,"new":{"module_name":"simple__test","snapshot_name":"query_range-4","metadata":{"source":"simple/src/lib.rs","assertion_line":403,"expression":"r"},"snapshot":"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>"},"old":{"module_name":"simple__test","metadata":{},"snapshot":"RoaringBitmap<[]>"}}
+{"run_id":"1765155254-979910000","line":346,"new":{"module_name":"simple__test","snapshot_name":"query_less_than_or_equal","metadata":{"source":"simple/src/lib.rs","assertion_line":346,"expression":"r"},"snapshot":"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>"},"old":{"module_name":"simple__test","metadata":{},"snapshot":"RoaringBitmap<[]>"}}
+{"run_id":"1765155254-979910000","line":313,"new":{"module_name":"simple__test","snapshot_name":"query_less_than","metadata":{"source":"simple/src/lib.rs","assertion_line":313,"expression":"r"},"snapshot":"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>"},"old":{"module_name":"simple__test","metadata":{},"snapshot":"RoaringBitmap<[]>"}}
+{"run_id":"1765155254-979910000","line":201,"new":{"module_name":"simple__test","snapshot_name":"query_and-3","metadata":{"source":"simple/src/lib.rs","assertion_line":201,"expression":"r"},"snapshot":"RoaringBitmap<[]>"},"old":{"module_name":"simple__test","metadata":{},"snapshot":"RoaringBitmap<[3]>"}}
+{"run_id":"1765155293-668534000","line":313,"new":{"module_name":"simple__test","snapshot_name":"query_less_than","metadata":{"source":"simple/src/lib.rs","assertion_line":313,"expression":"r"},"snapshot":"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>"},"old":{"module_name":"simple__test","metadata":{},"snapshot":"RoaringBitmap<[]>"}}
+{"run_id":"1765155293-668534000","line":346,"new":{"module_name":"simple__test","snapshot_name":"query_less_than_or_equal","metadata":{"source":"simple/src/lib.rs","assertion_line":346,"expression":"r"},"snapshot":"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>"},"old":{"module_name":"simple__test","metadata":{},"snapshot":"RoaringBitmap<[]>"}}
+{"run_id":"1765155303-528824000","line":346,"new":{"module_name":"simple__test","snapshot_name":"query_less_than_or_equal","metadata":{"source":"simple/src/lib.rs","assertion_line":346,"expression":"r"},"snapshot":"RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>"},"old":{"module_name":"simple__test","metadata":{},"snapshot":"RoaringBitmap<[]>"}}
+{"run_id":"1765155356-391048000","line":346,"new":null,"old":null}
+{"run_id":"1765155356-391048000","line":350,"new":null,"old":null}
+{"run_id":"1765155356-391048000","line":354,"new":null,"old":null}
+{"run_id":"1765155356-391048000","line":358,"new":null,"old":null}
+{"run_id":"1765155356-391048000","line":362,"new":null,"old":null}
+{"run_id":"1765155356-391048000","line":366,"new":null,"old":null}
+{"run_id":"1765155356-391048000","line":370,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":118,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":189,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":216,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":245,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":278,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":195,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":313,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":346,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":126,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":282,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":201,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":350,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":220,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":286,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":207,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":354,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":249,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":135,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":224,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":317,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":290,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":382,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":163,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":358,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":253,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":321,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":294,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":169,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":362,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":257,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":389,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":139,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":228,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":298,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":366,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":261,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":396,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":175,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":143,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":300,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":325,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":370,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":265,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":181,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":403,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":304,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":269,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":329,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":408,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":232,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":147,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":333,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":413,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":236,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":151,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":418,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":337,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":155,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":425,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":430,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":435,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":440,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":447,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":452,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":458,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":464,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":470,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":477,"new":null,"old":null}
+{"run_id":"1765155358-944707000","line":483,"new":null,"old":null}

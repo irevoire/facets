@@ -1,0 +1,13 @@
+[package]
+name = "simple"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+facets = { path = ".." }
+roaring = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+proptest = { workspace = true }
