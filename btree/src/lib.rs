@@ -1141,7 +1141,11 @@ mod test {
         let mut f = craft_simple_facet();
         f.arena.get_mut(NodeId::craft(1)).keys.clear();
         let errors = f.assert_well_formed().unwrap_err();
-        insta::assert_snapshot!(Wfe(&errors), @"Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because empty node which is illegal except for the root node if the whole btree is empty.\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of keys (0) and values (1) do not match and are supposed to be equal\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of children is supposed to be equal to the number of keys (0) + 1 but instead got 2 children.");
+        insta::assert_snapshot!(Wfe(&errors), @"
+            Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because empty node which is illegal except for the root node if the whole btree is empty.
+            Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of keys (0) and values (1) do not match and are supposed to be equal
+            Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of children is supposed to be equal to the number of keys (0) + 1 but instead got 2 children.
+        ");
     }
 
     #[test]
@@ -1171,7 +1175,10 @@ mod test {
         let mut f = craft_simple_facet();
         f.arena.get_mut(NodeId::craft(1)).sum.insert(1234);
         let errors = f.assert_well_formed().unwrap_err();
-        insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because values RoaringBitmap<[1234]> are contained in child but not in parent RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>\nNode [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because values RoaringBitmap<[1234]> are contained in the value sum of a node, but not in its value or children");
+        insta::assert_snapshot!(Wfe(&errors), @"
+            Node [] is corrupted because values RoaringBitmap<[1234]> are contained in child but not in parent RoaringBitmap<[0, 1, 2, 3, 4, 5, 6, 7, 8]>
+            Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because values RoaringBitmap<[1234]> are contained in the value sum of a node, but not in its value or children
+        ");
     }
 
     #[test]
