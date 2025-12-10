@@ -95,9 +95,9 @@ impl Node {
 
     fn recalculate_sum(id: NodeId, arena: &mut Nodes) {
         let this = arena.get(id);
-        // if !this.dirty {
-        //     return;
-        // };
+        if !this.dirty {
+            return;
+        };
         let mut sum = RoaringBitmap::new();
         for &child in &this.children.clone() {
             Self::recalculate_sum(child, arena);
@@ -531,7 +531,8 @@ impl Display for Node {
                 .join("|")
         };
         let node_string: String = format!(
-            "Node: {{{}}} (sum: {}) id: {:?}",
+            "Node{}: {{{}}} (sum: {}) id: {:?}",
+            if self.dirty { " (dirty)" } else { "" },
             self.keys
                 .iter()
                 .enumerate()
@@ -992,13 +993,13 @@ mod test {
 
         for &(key, value) in DATA {
             f.insert(key.into(), RoaringBitmap::from_iter([value]));
-            Node::recalculate_sum(f.root_idx, &mut f.arena);
             let s = f
                 .arena
                 .get(f.root_idx)
                 .better_ascii_draw("\t", 0, &formatter, &f.arena);
             println!("{s}");
         }
+        Node::recalculate_sum(f.root_idx, &mut f.arena);
         f
     }
 
