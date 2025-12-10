@@ -118,10 +118,6 @@ impl<Entry> Arena<Entry> {
     }
 
     pub fn push(&mut self, value: Entry) -> ArenaId<Entry> {
-        self.new_push(value)
-    }
-
-    pub fn new_push(&mut self, value: Entry) -> ArenaId<Entry> {
         if self.deleted.is_empty() {
             let id = self.nodes.len();
             self.nodes.push(Some(value));
@@ -131,12 +127,6 @@ impl<Entry> Arena<Entry> {
             self.nodes[id] = Some(value);
             ArenaId(id, PhantomData)
         }
-    }
-
-    pub fn old_push(&mut self, value: Entry) -> ArenaId<Entry> {
-        let id = self.nodes.len();
-        self.nodes.push(Some(value));
-        ArenaId(id, PhantomData)
     }
 
     pub fn get(&self, id: ArenaId<Entry>) -> &Entry {
