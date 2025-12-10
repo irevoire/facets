@@ -105,6 +105,7 @@ impl Node {
         }
         let this = arena.get_mut(id);
         this.sum = this.values.iter().fold(sum, |a, b| a | b);
+        this.dirty = false;
     }
 
     #[allow(unused)]
