@@ -975,25 +975,25 @@ mod test {
         f.assert_well_formed().unwrap();
     }
 
-    fn craft_facet_with_inserts() -> BTree {
-        let data = vec![
-            (65, 0),
-            (20, 1),
-            (22, 2),
-            (35, 3),
-            (25, 4),
-            (41, 5),
-            (45, 6),
-            (12, 7),
-            (24, 8),
-        ];
+    static DATA: &'static [(usize, u32)] = &[
+        (65, 0),
+        (20, 1),
+        (22, 2),
+        (35, 3),
+        (25, 4),
+        (41, 5),
+        (45, 6),
+        (12, 7),
+        (24, 8),
+    ];
 
+    fn craft_facet_with_inserts() -> BTree {
         let formatter =
             |key: &Key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string();
         let mut f = BTree::on_ram();
         f.order = 2;
 
-        for (key, value) in data {
+        for &(key, value) in DATA {
             f.insert(key.into(), RoaringBitmap::from_iter([value]));
             Node::recalculate_sum(f.root_idx, &mut f.arena);
             let s = f
@@ -1122,6 +1122,17 @@ mod test {
         match facet.assert_well_formed().map_err(|e| Wfe(&e).to_string()) {
             Ok(_) => (),
             Err(err) => panic!("{err}"),
+        }
+    }
+
+    #[test]
+    fn integrity_insertion_preserves_data() {
+        let facet = craft_facet_with_inserts();
+        for &(key, value) in DATA {
+            assert_eq!(
+                facet.query(&Query::Equal(key.into())),
+                RoaringBitmap::from_iter([value])
+            );
         }
     }
 
