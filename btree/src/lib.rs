@@ -73,7 +73,7 @@ impl Node {
             )
         };
 
-        let left_id = arena.empty_entry();
+        let left_id = this;
         let right_id = arena.empty_entry();
 
         let left_node = arena.get_mut(left_id);
@@ -691,10 +691,6 @@ impl BTree {
                         self.arena.get_mut(left).parent = Some(next_node_id);
                         self.arena.get_mut(right).parent = Some(next_node_id);
                     }
-
-                    // The old node is dead, remove it
-
-                    self.arena.delete(loop_node_id);
                     loop_node_id = next_node_id;
                 }
             }
