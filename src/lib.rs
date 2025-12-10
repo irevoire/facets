@@ -91,11 +91,15 @@ impl<T> Copy for ArenaId<T> {}
 
 pub struct Arena<Entry> {
     nodes: Vec<Option<Entry>>,
+    deleted: Vec<usize>,
 }
 
 impl<T> Default for Arena<T> {
     fn default() -> Self {
-        Self { nodes: Vec::new() }
+        Self {
+            nodes: Vec::new(),
+            deleted: Vec::new(),
+        }
     }
 }
 
@@ -107,10 +111,29 @@ impl<Entry: Default> Arena<Entry> {
 
 impl<Entry> Arena<Entry> {
     pub fn new() -> Self {
-        Self { nodes: vec![] }
+        Self {
+            nodes: vec![],
+            deleted: vec![],
+        }
     }
 
     pub fn push(&mut self, value: Entry) -> ArenaId<Entry> {
+        self.new_push(value)
+    }
+
+    pub fn new_push(&mut self, value: Entry) -> ArenaId<Entry> {
+        if self.deleted.is_empty() {
+            let id = self.nodes.len();
+            self.nodes.push(Some(value));
+            ArenaId(id, PhantomData)
+        } else {
+            let id = self.deleted.pop().unwrap();
+            self.nodes[id] = Some(value);
+            ArenaId(id, PhantomData)
+        }
+    }
+
+    pub fn old_push(&mut self, value: Entry) -> ArenaId<Entry> {
         let id = self.nodes.len();
         self.nodes.push(Some(value));
         ArenaId(id, PhantomData)
@@ -127,11 +150,24 @@ impl<Entry> Arena<Entry> {
     }
 
     pub fn delete(&mut self, id: ArenaId<Entry>) {
+        self.deleted.push(id.0);
         self.nodes[id.0] = None;
     }
 
     pub fn craft_from(nodes: Vec<Option<Entry>>) -> Self {
-        Self { nodes }
+        let deleted = nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| match entry {
+                Some(_) => None,
+                None => Some(idx),
+            })
+            .collect();
+        Self::recreate_from(nodes, deleted)
+    }
+
+    pub fn recreate_from(nodes: Vec<Option<Entry>>, deleted: Vec<usize>) -> Self {
+        Self { nodes, deleted }
     }
 }
 
