@@ -54,13 +54,17 @@ pub enum ExplorationStep {
     Dive { child_idx: usize },
 }
 
+pub struct NodeSplit {
+    key: Key,
+    value: RoaringBitmap,
+    parent: Option<NodeId>,
+    left: NodeId,
+    right: NodeId,
+}
+
 impl Node {
-    pub fn split_at(
-        this: NodeId,
-        idx: usize,
-        arena: &mut Nodes,
-    ) -> (Key, RoaringBitmap, NodeId, NodeId) {
-        let (key, value, keys, values, children) = {
+    pub fn split_at(this: NodeId, idx: usize, arena: &mut Nodes) -> NodeSplit {
+        let (key, value, keys, values, children, parent) = {
             let this = arena.get(this);
             let key = this.keys[idx].clone();
             let value = this.values[idx].clone();
@@ -70,13 +74,14 @@ impl Node {
                 this.keys.clone(),
                 this.values.clone(),
                 this.children.clone(),
+                this.parent,
             )
         };
-
         let left_id = this;
         let right_id = arena.empty_entry();
 
         let left_node = arena.get_mut(left_id);
+        left_node.parent = None;
         left_node.arena_idx = left_id;
         left_node.keys = keys.iter().take(idx).cloned().collect();
         left_node.values = values.iter().take(idx).cloned().collect();
@@ -84,13 +89,20 @@ impl Node {
         left_node.dirty = true;
 
         let right_node = arena.get_mut(right_id);
+        right_node.parent = None;
         right_node.arena_idx = right_id;
         right_node.keys = keys.iter().skip(idx + 1).cloned().collect();
         right_node.values = values.iter().skip(idx + 1).cloned().collect();
         right_node.children = children.iter().skip(idx + 1).cloned().collect();
         right_node.dirty = true;
 
-        (key, value, left_id, right_id)
+        NodeSplit {
+            key,
+            value,
+            parent,
+            left: left_id,
+            right: right_id,
+        }
     }
 
     fn recalculate_sum(id: NodeId, arena: &mut Nodes) {
@@ -634,24 +646,22 @@ impl BTree {
                 let mut loop_children = vec![];
                 loop {
                     // First, we insert the key/value pair into the node, and reconnect any dangling children
-                    {
-                        let node = self.arena.get_mut(loop_node_id);
-                        node.keys.insert(loop_idx, loop_key.clone());
-                        node.values.insert(loop_idx, loop_value.clone());
-                        if node.children.is_empty() {
-                            node.children = loop_children;
-                        } else {
-                            node.children = node
-                                .children
-                                .iter()
-                                .take(loop_idx)
-                                .chain(loop_children.iter())
-                                .chain(node.children.iter().skip(loop_idx + 1))
-                                .cloned()
-                                .collect();
-                        }
-                        node.dirty = true;
+                    let node = self.arena.get_mut(loop_node_id);
+                    node.keys.insert(loop_idx, loop_key.clone());
+                    node.values.insert(loop_idx, loop_value.clone());
+                    if node.children.is_empty() {
+                        node.children = loop_children;
+                    } else {
+                        node.children = node
+                            .children
+                            .iter()
+                            .take(loop_idx)
+                            .chain(loop_children.iter())
+                            .chain(node.children.iter().skip(loop_idx + 1))
+                            .cloned()
+                            .collect();
                     }
+                    node.dirty = true;
 
                     // If we're not oversized, we're done and we can exit here
                     if self.arena.get(loop_node_id).keys.len() <= self.order {
@@ -660,16 +670,21 @@ impl BTree {
 
                     // Otherwise we need to split the node at the midpoint
                     // This gives us the median key/value pair, as well as two new nodes for the left and right side
-                    let (key, value, left, right) =
-                        { Node::split_at(loop_node_id, self.order / 2, &mut self.arena) };
+                    let NodeSplit {
+                        key,
+                        value,
+                        parent,
+                        left,
+                        right,
+                    } = Node::split_at(loop_node_id, self.order / 2, &mut self.arena);
 
-                    // These become the key/value pair and the dangline children we'll need to reconnect
+                    // These become the key/value pair and the dangling children we'll need to reconnect
                     loop_key = key;
                     loop_value = value;
                     loop_children = vec![left, right];
 
                     // Now we find the node we're going to insert these new values into
-                    let next_node_id = match self.arena.get(loop_node_id).parent {
+                    loop_node_id = match parent {
                         Some(parent) => {
                             let node = self.arena.get(parent);
                             let ExplorationStep::Dive { child_idx } =
@@ -688,11 +703,8 @@ impl BTree {
                         }
                     };
 
-                    {
-                        self.arena.get_mut(left).parent = Some(next_node_id);
-                        self.arena.get_mut(right).parent = Some(next_node_id);
-                    }
-                    loop_node_id = next_node_id;
+                    self.arena.get_mut(left).parent = Some(loop_node_id);
+                    self.arena.get_mut(right).parent = Some(loop_node_id);
                 }
             }
         }
