@@ -1,0 +1,17 @@
+[package]
+name = "index"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+facets = { path = ".." }
+btree = { path = "../btree" }
+simple = { path = "../simple" }
+saute = { path = "../saute" }
+roaring = { workspace = true }
+thiserror = { workspace = true }
+csv = "1.4.0"
+
+[dev-dependencies]
+insta = { workspace = true }
+proptest = { workspace = true }

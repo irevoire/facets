@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{fmt::Display, ops::Bound};
 
-use facets::{Key, Query};
+use facets::{arena, key::Key, query::Query};
 use roaring::RoaringBitmap;
 
 //#[derive(Debug)]
@@ -11,8 +11,8 @@ pub struct BTree {
     arena: Nodes,
 }
 
-type Nodes = facets::Arena<Node>;
-type NodeId = facets::ArenaId<Node>;
+type Nodes = facets::arena::Arena<Node>;
+type NodeId = facets::arena::ArenaId<Node>;
 
 #[derive(Debug, Default)]
 pub struct Node {
@@ -87,6 +87,9 @@ impl Node {
         left_node.values = values.iter().take(idx).cloned().collect();
         left_node.children = children.iter().take(idx + 1).cloned().collect();
         left_node.dirty = true;
+        for child in left_node.children.clone() {
+            arena.get_mut(child).parent = Some(left_id);
+        }
 
         let right_node = arena.get_mut(right_id);
         right_node.parent = None;
@@ -95,6 +98,9 @@ impl Node {
         right_node.values = values.iter().skip(idx + 1).cloned().collect();
         right_node.children = children.iter().skip(idx + 1).cloned().collect();
         right_node.dirty = true;
+        for child in right_node.children.clone() {
+            arena.get_mut(child).parent = Some(right_id);
+        }
 
         NodeSplit {
             key,
@@ -107,9 +113,9 @@ impl Node {
 
     fn recalculate_sum(id: NodeId, arena: &mut Nodes) {
         let this = arena.get(id);
-        if !this.dirty {
-            return;
-        };
+        // if !this.dirty {
+        //     return;
+        // };
         let mut sum = RoaringBitmap::new();
         for &child in &this.children.clone() {
             Self::recalculate_sum(child, arena);
@@ -508,7 +514,6 @@ impl Node {
         }
     }
 
-    #[cfg(test)]
     fn better_ascii_draw(
         &self,
         tab: &str,
@@ -534,8 +539,7 @@ impl Node {
 
 impl Display for Node {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let key_formatter =
-            |key: &Key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string();
+        let key_formatter = |key: &Key| format!("{key}");
         let rb_formatter = |rb: &RoaringBitmap| {
             rb.iter()
                 .map(|v| v.to_string())
@@ -543,8 +547,12 @@ impl Display for Node {
                 .join("|")
         };
         let node_string: String = format!(
-            "Node{}: {{{}}} (sum: {}) id: {:?}",
+            "Node{}({}): {{{}}} (sum: {}) id: {:?}",
             if self.dirty { " (dirty)" } else { "" },
+            match self.parent {
+                Some(parent) => format!("{parent:?}"),
+                None => "root".to_string(),
+            },
             self.keys
                 .iter()
                 .enumerate()
@@ -581,6 +589,18 @@ impl BTree {
         }
     }
 
+    /// Initialize a new facet btree on ram
+    pub fn with_order(order: usize) -> Self {
+        let mut nodes = Nodes::new();
+        let root = nodes.push(Node::default());
+
+        Self {
+            order,
+            root_idx: root,
+            arena: nodes,
+        }
+    }
+
     /// Return the depth of the btree.
     pub fn depth(&self) -> usize {
         // even the empty btree contains 1 node
@@ -605,6 +625,10 @@ impl BTree {
     #[allow(unused)]
     fn root_mut(&mut self) -> &mut Node {
         self.arena.get_mut(self.root_idx)
+    }
+
+    pub fn apply(&mut self) {
+        Node::recalculate_sum(self.root_idx, &mut self.arena);
     }
 
     /// Process a query and return all the matching identifiers.
@@ -684,6 +708,7 @@ impl BTree {
                     loop_children = vec![left, right];
 
                     // Now we find the node we're going to insert these new values into
+                    //self.arena.delete(loop_node_id);
                     loop_node_id = match parent {
                         Some(parent) => {
                             let node = self.arena.get(parent);
@@ -828,6 +853,18 @@ impl BTree {
         } else {
             Err(errors)
         }
+    }
+}
+
+impl Display for BTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let key_formatter = |key: &Key| format!("{key}");
+        write!(
+            f,
+            "{}",
+            self.root()
+                .better_ascii_draw("\t", 0, &key_formatter, &self.arena)
+        )
     }
 }
 
@@ -1098,6 +1135,79 @@ mod test {
                 Some(n6),
             ]),
         }
+    }
+    // Node: {9:5|8} (sum: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10) id: ArenaId(6)
+    // Node (dirty): {7:3, 13:1|6} (sum: 2, 3, 9) id: ArenaId(2)
+    // 	Node: {5:2} (sum: 2) id: ArenaId(0)
+    // 	Node (dirty): {12:11, 18:12} (sum: 1, 4, 6) id: ArenaId(1)
+    // 	Node (dirty): {14:4} (sum: ) id: ArenaId(7)
+    // Node (dirty): {11:0|7|13} (sum: 0, 1, 4, 6, 7, 10) id: ArenaId(5)
+    // 	Node: {10:10} (sum: 10) id: ArenaId(4)
+    // 	Node (dirty): {12:11, 18:12} (sum: 1, 4, 6) id: ArenaId(1)
+
+    #[test]
+    fn insert_twice() {
+        let mut f = BTree::with_order(2);
+        f.insert(11.into(), RoaringBitmap::from_iter([0]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(13.into(), RoaringBitmap::from_iter([1]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(5.into(), RoaringBitmap::from_iter([2]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(7.into(), RoaringBitmap::from_iter([3]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(14.into(), RoaringBitmap::from_iter([4]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(9.into(), RoaringBitmap::from_iter([5]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(13.into(), RoaringBitmap::from_iter([6]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(11.into(), RoaringBitmap::from_iter([7]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(9.into(), RoaringBitmap::from_iter([8]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(8.into(), RoaringBitmap::from_iter([9]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(10.into(), RoaringBitmap::from_iter([10]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(12.into(), RoaringBitmap::from_iter([11]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(18.into(), RoaringBitmap::from_iter([12]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(11.into(), RoaringBitmap::from_iter([13]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}");
+        f.insert(13.into(), RoaringBitmap::from_iter([14]));
+        f.apply();
+        f.assert_well_formed().unwrap();
+        println!("{f}")
     }
 
     #[test]
@@ -1591,7 +1701,7 @@ mod test {
         insta::assert_compact_debug_snapshot!(r, @"RoaringBitmap<[]>");
     }
 
-    use facets::Arena;
+    use facets::arena::Arena;
     use proptest::prelude::*;
     proptest! {
         #[test]

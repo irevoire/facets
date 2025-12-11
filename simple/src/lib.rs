@@ -1,4 +1,4 @@
-use facets::{Key, Query};
+use facets::{key::Key, query::Query};
 use roaring::RoaringBitmap;
 
 /// The simplest datastructure possible. It's just a sorted vector.
@@ -92,7 +92,7 @@ impl Simple {
 mod test {
     use std::ops::Bound;
 
-    use facets::Query;
+    use facets::query::Query;
     use roaring::RoaringBitmap;
 
     use crate::Simple;

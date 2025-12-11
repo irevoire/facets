@@ -1,6 +1,9 @@
-use std::{fmt, marker::PhantomData};
+use std::fmt;
 
-use facets::{Arena, ArenaId};
+use facets::{
+    arena::{Arena, ArenaId},
+    query::Query,
+};
 use roaring::RoaringBitmap;
 
 /// The skip list.
@@ -51,6 +54,10 @@ impl Saute {
             }
         }
 
+        todo!()
+    }
+
+    pub fn query(&self, query: &Query) -> RoaringBitmap {
         todo!()
     }
 }
