@@ -1,1 +1,5 @@
 /target
+*.csv
+*.svg
+*.data
+*.data.old
