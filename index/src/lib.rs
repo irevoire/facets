@@ -12,15 +12,19 @@ use saute::Saute;
 use simple::Simple;
 
 enum Storage {
+    #[allow(unused)]
     Simple(Simple),
+    #[allow(unused)]
     Saute(Saute),
     BTree(BTree),
 }
 
 impl Storage {
+    #[allow(unused)]
     pub fn new_simple() -> Self {
         Self::Simple(Simple::new())
     }
+    #[allow(unused)]
     pub fn new_saute() -> Self {
         Self::Saute(Saute::new())
     }
@@ -30,8 +34,8 @@ impl Storage {
 
     pub fn apply(&mut self) {
         match self {
-            Storage::Simple(simple) => (),
-            Storage::Saute(saute) => (),
+            Storage::Simple(_) => (),
+            Storage::Saute(_) => (),
             Storage::BTree(btree) => btree.apply(),
         }
     }
@@ -58,8 +62,8 @@ impl Storage {
 impl Display for Storage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Storage::Simple(simple) => write!(f, "simple"),
-            Storage::Saute(saute) => write!(f, "saute"),
+            Storage::Simple(_) => write!(f, "simple"),
+            Storage::Saute(_) => write!(f, "saute"),
             Storage::BTree(btree) => write!(f, "{}", btree),
         }
     }
@@ -337,8 +341,6 @@ pub struct Index {
     used_ids: RoaringBitmap,
     documents: Vec<(String, Vec<(String, String)>)>,
     data: HashMap<String, Storage>,
-    keystrings: HashMap<Key, String>,
-    stringkeys: HashMap<String, Key>,
 }
 
 impl Index {
@@ -349,20 +351,6 @@ impl Index {
             .from_reader(data.as_bytes());
 
         let mut data = HashMap::new();
-        let mut keystrings: HashMap<Key, String> = HashMap::new();
-        let mut stringkeys: HashMap<String, Key> = HashMap::new();
-        let mut next_key = 1000;
-
-        let mut get_string_key = |s: String| match stringkeys.get(&s) {
-            Some(key) => key.clone(),
-            None => {
-                let key: Key = next_key.into();
-                next_key += 1;
-                stringkeys.insert(s.clone(), key.clone());
-                keystrings.insert(key.clone(), s.clone());
-                key
-            }
-        };
 
         let header = rdr.headers()?.clone();
         let headers: Vec<_> = header.iter().map(|s| s.to_string()).collect();
@@ -400,8 +388,6 @@ impl Index {
             used_ids: RoaringBitmap::from_sorted_iter(0..documents.len() as u32).unwrap(),
             documents,
             data,
-            keystrings,
-            stringkeys,
         })
     }
 

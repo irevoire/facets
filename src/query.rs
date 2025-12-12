@@ -157,6 +157,7 @@ impl Display for Query {
     }
 }
 
+#[cfg(test)]
 mod test {
     use super::Query;
     use crate::key::Key;
