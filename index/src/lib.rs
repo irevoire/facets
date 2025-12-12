@@ -309,20 +309,35 @@ impl SearchQuery {
         self.filter = Some(filter);
     }
 
-    fn execute(&self, index: &Index) -> Result<Vec<(String, Vec<(String, String)>)>, QueryError> {
-        let mut documents = Vec::new();
-
-        let filter = if let Some(ref filter) = self.filter {
+    fn execute(&self, index: &Index) -> Result<RoaringBitmap, QueryError> {
+        let indices = if let Some(ref filter) = self.filter {
             filter.execute(index)?
         } else {
             index.used_ids.clone()
         };
+        Ok(indices)
+    }
+}
 
-        for idx in filter {
-            documents.push(index.documents[idx as usize].clone());
-        }
+pub struct SearchResults<'a> {
+    index: usize,
+    results: RoaringBitmap,
+    data: &'a Index,
+}
 
-        Ok(documents)
+impl<'a> Iterator for SearchResults<'a> {
+    type Item = (String, Vec<(String, String)>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let idx = self.index;
+        self.index += 1;
+        self.data.documents.get(idx).cloned()
+    }
+}
+
+impl<'a> ExactSizeIterator for SearchResults<'a> {
+    fn len(&self) -> usize {
+        self.results.len() as usize
     }
 }
 
@@ -395,11 +410,17 @@ impl Index {
         self.data.get(field)
     }
 
-    pub fn execute(
-        &self,
-        query: &SearchQuery,
-    ) -> Result<Vec<(String, Vec<(String, String)>)>, QueryError> {
+    fn get_bitmap(&self, query: &SearchQuery) -> Result<RoaringBitmap, QueryError> {
         query.execute(self)
+    }
+
+    pub fn execute(&self, query: &SearchQuery) -> Result<SearchResults, QueryError> {
+        let results = query.execute(self)?;
+        Ok(SearchResults {
+            index: 0,
+            results,
+            data: self,
+        })
     }
 }
 
