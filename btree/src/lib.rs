@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{fmt::Display, ops::Bound};
 
-use facets::{arena, key::Key, query::Query};
+use facets::{key::Key, query::Query};
 use roaring::RoaringBitmap;
 
 //#[derive(Debug)]
@@ -124,25 +124,6 @@ impl Node {
         let this = arena.get_mut(id);
         this.sum = this.values.iter().fold(sum, |a, b| a | b);
         this.dirty = false;
-    }
-
-    #[allow(unused)]
-    fn mark_dirty(id: NodeId, arena: &mut Nodes) {
-        let this = arena.get_mut(id);
-        if this.dirty {
-            return;
-        }
-        this.dirty = true;
-        match this.parent {
-            Some(parent) => Self::mark_dirty(parent, arena),
-            None => (),
-        }
-    }
-
-    #[allow(unused)]
-    fn recompute_and_query(id: NodeId, query: &Query, arena: &mut Nodes) -> RoaringBitmap {
-        Self::recalculate_sum(id, arena);
-        arena.get(id).query(query, arena)
     }
 
     fn query(&self, query: &Query, arena: &Nodes) -> RoaringBitmap {
@@ -416,7 +397,7 @@ impl Node {
                             for &child in node.children.iter().take(right).skip(left + 1) {
                                 acc |= &arena.get(child).sum;
                             }
-                            explore.push(&arena.get(node.children[left]));
+                            explore.push(arena.get(node.children[left]));
                         }
                         (
                             ExplorationStep::Dive { child_idx: left },
@@ -486,7 +467,7 @@ impl Node {
         while let Some(node) = explore.pop() {
             let node = arena.get(node);
             let step = node.next_step_toward(key);
-            hook(&node, step);
+            hook(node, step);
             if let ExplorationStep::Dive { child_idx } = step {
                 explore.push(node.children[child_idx]);
             }
