@@ -32,6 +32,12 @@ impl<T> ArenaId<T> {
     }
 }
 
+impl<T> From<ArenaId<T>> for usize {
+    fn from(value: ArenaId<T>) -> Self {
+        value.0
+    }
+}
+
 impl<T> Clone for ArenaId<T> {
     fn clone(&self) -> Self {
         *self

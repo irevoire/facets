@@ -780,6 +780,28 @@ impl BTree {
                 let c = self.arena.get(child);
                 let ret = &c.sum - &node.sum;
 
+                match c.parent {
+                    Some(parent_idx) => {
+                        if parent_idx != node.arena_idx {
+                            errors.push(WellFormedError::from_corruption(
+                                &path,
+                                Corruption::ParentChidrenRelationBroken {
+                                    node: child.into(),
+                                    parent: node.arena_idx.into(),
+                                    wrong_parent: parent_idx.into(),
+                                },
+                            ));
+                        }
+                    }
+                    None => errors.push(WellFormedError::from_corruption(
+                        &path,
+                        Corruption::ChildrenMissingParent {
+                            node: child.into(),
+                            parent: node.arena_idx.into(),
+                        },
+                    )),
+                }
+
                 if let Some(prev_key_idx) = idx.checked_sub(1)
                     && let Some(prev_key) = node.keys.get(prev_key_idx)
                     && let Some(bad_key) = c.keys.iter().find(|k| k < &prev_key)
@@ -969,6 +991,16 @@ pub enum Corruption {
         bad_key: Key,
         current_key: Key,
     },
+    #[error(
+        "node number {node} is a children of {parent} but think it's a children of {wrong_parent}"
+    )]
+    ParentChidrenRelationBroken {
+        node: usize,
+        parent: usize,
+        wrong_parent: usize,
+    },
+    #[error("node number {node} is a children of {parent} but think it's the root")]
+    ChildrenMissingParent { node: usize, parent: usize },
 }
 
 #[cfg(test)]
@@ -1352,6 +1384,22 @@ mod test {
         Node [[0, 0, 0, 0, 0, 0, 0, 35] (       #)-] is corrupted because children at index 0 contains the key 41 which is superior to our current key 22 when it should be inferior
         Node [-[0, 0, 0, 0, 0, 0, 0, 35] (       #)] is corrupted because children at index 1 contains the key 24 which is inferior to our current key 45 when it should be superior
         ");
+    }
+
+    #[test]
+    fn well_formed_missing_parent() {
+        let mut f = craft_simple_facet();
+        f.arena.get_mut(NodeId::craft(1)).parent = None;
+        let errors = f.assert_well_formed().unwrap_err();
+        insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because node number 1 is a children of 0 but think it's the root");
+    }
+
+    #[test]
+    fn well_formed_bad_parent() {
+        let mut f = craft_simple_facet();
+        f.arena.get_mut(NodeId::craft(1)).parent = Some(NodeId::craft(4));
+        let errors = f.assert_well_formed().unwrap_err();
+        insta::assert_snapshot!(Wfe(&errors), @"Node [] is corrupted because node number 1 is a children of 0 but think it's a children of 4");
     }
 
     #[test]
