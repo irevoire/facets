@@ -64,7 +64,7 @@ impl Display for Storage {
         match self {
             Storage::Simple(_) => write!(f, "simple"),
             Storage::Saute(_) => write!(f, "saute"),
-            Storage::BTree(btree) => write!(f, "{}", btree),
+            Storage::BTree(btree) => write!(f, "{btree}"),
         }
     }
 }
@@ -345,7 +345,7 @@ impl fmt::Display for SearchQuery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Filter: ")?;
         match self.filter {
-            Some(ref filter) => write!(f, "{}", filter)?,
+            Some(ref filter) => write!(f, "{filter}")?,
             None => write!(f, "no filter")?,
         }
         Ok(())
