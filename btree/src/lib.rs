@@ -754,6 +754,12 @@ impl BTree {
                     },
                 ));
             }
+            if !node.keys.is_sorted() {
+                errors.push(WellFormedError::from_corruption(
+                    &path,
+                    Corruption::KeysAreNotSorted,
+                ));
+            }
             if !node.children.is_empty() && node.children.len() != node.keys.len() + 1 {
                 errors.push(WellFormedError::from_corruption(
                     &path,
@@ -918,6 +924,8 @@ pub enum Corruption {
         unknown_values: RoaringBitmap,
         node_sum: RoaringBitmap,
     },
+    #[error("Keys are not correctly ordered. They should be alphanumerically sorted.")]
+    KeysAreNotSorted,
 }
 
 #[cfg(test)]
@@ -1269,6 +1277,14 @@ mod test {
             Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because number of keys (1) and values (0) do not match and are supposed to be equal
             Node [-[0, 0, 0, 0, 0, 0, 0, 35] (\0\0\0\0\0\0\0#)] is corrupted because values RoaringBitmap<[2]> are contained in the value sum of a node, but not in its value or children
         ");
+    }
+
+    #[test]
+    fn well_formed_keys_are_not_sorted() {
+        let mut f = craft_simple_facet();
+        f.arena.get_mut(NodeId::craft(3)).keys.swap(0, 1);
+        let errors = f.assert_well_formed().unwrap_err();
+        insta::assert_snapshot!(Wfe(&errors), @"Node [-[0, 0, 0, 0, 0, 0, 0, 35] (       #) . [0, 0, 0, 0, 0, 0, 0, 22] (       )-] is corrupted because Keys are not correctly ordered. They should be alphanumerically sorted.");
     }
 
     #[test]
