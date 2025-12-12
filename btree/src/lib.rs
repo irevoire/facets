@@ -780,6 +780,16 @@ impl BTree {
                 let c = self.arena.get(child);
                 let ret = &c.sum - &node.sum;
 
+                if c.arena_idx != child {
+                    errors.push(WellFormedError::from_corruption(
+                        &path,
+                        Corruption::SelfArenaIdIsWrong {
+                            actual_id: c.arena_idx.into(),
+                            self_id: child.into(),
+                        },
+                    ));
+                }
+
                 match c.parent {
                     Some(parent_idx) => {
                         if parent_idx != node.arena_idx {
@@ -1001,6 +1011,8 @@ pub enum Corruption {
     },
     #[error("node number {node} is a children of {parent} but think it's the root")]
     ChildrenMissingParent { node: usize, parent: usize },
+    #[error("node number {actual_id} believe its id is {self_id}")]
+    SelfArenaIdIsWrong { actual_id: usize, self_id: usize },
 }
 
 #[cfg(test)]
@@ -1383,6 +1395,18 @@ mod test {
         Node [] is corrupted because children at index 1 contains the key 22 which is inferior to our current key 35 when it should be superior
         Node [[0, 0, 0, 0, 0, 0, 0, 35] (       #)-] is corrupted because children at index 0 contains the key 41 which is superior to our current key 22 when it should be inferior
         Node [-[0, 0, 0, 0, 0, 0, 0, 35] (       #)] is corrupted because children at index 1 contains the key 24 which is inferior to our current key 45 when it should be superior
+        ");
+    }
+
+    #[test]
+    fn well_formed_wrong_self_arena_id() {
+        let mut f = craft_simple_facet();
+        f.arena.get_mut(NodeId::craft(1)).arena_idx = NodeId::craft(0);
+        let errors = f.assert_well_formed().unwrap_err();
+        insta::assert_snapshot!(Wfe(&errors), @r"
+        Node [] is corrupted because node number 0 believe its id is 1
+        Node [-[0, 0, 0, 0, 0, 0, 0, 35] (       #)] is corrupted because node number 2 is a children of 0 but think it's a children of 1
+        Node [-[0, 0, 0, 0, 0, 0, 0, 35] (       #)] is corrupted because node number 3 is a children of 0 but think it's a children of 1
         ");
     }
 
