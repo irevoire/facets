@@ -777,7 +777,34 @@ impl BTree {
             // It's also the perfect time to call ourselves on the next child.
             let mut remaining = node.sum.clone();
             for (idx, &child) in node.children.iter().enumerate() {
-                let ret = &self.arena.get(child).sum - &node.sum;
+                let c = self.arena.get(child);
+                let ret = &c.sum - &node.sum;
+
+                if let Some(prev_key_idx) = idx.checked_sub(1)
+                    && let Some(prev_key) = node.keys.get(prev_key_idx)
+                    && let Some(bad_key) = c.keys.iter().find(|k| k < &prev_key)
+                {
+                    errors.push(WellFormedError::from_corruption(
+                        &path,
+                        Corruption::ChildrenContainKeyInferiorToOurKey {
+                            children_idx: idx,
+                            bad_key: bad_key.clone(),
+                            current_key: prev_key.clone(),
+                        },
+                    ));
+                }
+                if let Some(next_key) = node.keys.get(idx)
+                    && let Some(bad_key) = c.keys.iter().find(|k| k > &next_key)
+                {
+                    errors.push(WellFormedError::from_corruption(
+                        &path,
+                        Corruption::ChildrenContainKeySuperiorToOurKey {
+                            children_idx: idx,
+                            bad_key: bad_key.clone(),
+                            current_key: next_key.clone(),
+                        },
+                    ));
+                }
                 if !ret.is_empty() {
                     errors.push(WellFormedError::from_corruption(
                         &path,
@@ -924,8 +951,24 @@ pub enum Corruption {
         unknown_values: RoaringBitmap,
         node_sum: RoaringBitmap,
     },
-    #[error("Keys are not correctly ordered. They should be alphanumerically sorted.")]
+    #[error("keys are not correctly ordered. They should be alphanumerically sorted.")]
     KeysAreNotSorted,
+    #[error(
+        "children at index {children_idx} contains the key {bad_key} which is superior to our current key {current_key} when it should be inferior"
+    )]
+    ChildrenContainKeySuperiorToOurKey {
+        children_idx: usize,
+        bad_key: Key,
+        current_key: Key,
+    },
+    #[error(
+        "children at index {children_idx} contains the key {bad_key} which is inferior to our current key {current_key} when it should be superior"
+    )]
+    ChildrenContainKeyInferiorToOurKey {
+        children_idx: usize,
+        bad_key: Key,
+        current_key: Key,
+    },
 }
 
 #[cfg(test)]
@@ -1284,7 +1327,31 @@ mod test {
         let mut f = craft_simple_facet();
         f.arena.get_mut(NodeId::craft(3)).keys.swap(0, 1);
         let errors = f.assert_well_formed().unwrap_err();
-        insta::assert_snapshot!(Wfe(&errors), @"Node [-[0, 0, 0, 0, 0, 0, 0, 35] (       #) . [0, 0, 0, 0, 0, 0, 0, 22] (       )-] is corrupted because Keys are not correctly ordered. They should be alphanumerically sorted.");
+        insta::assert_snapshot!(Wfe(&errors), @"Node [-[0, 0, 0, 0, 0, 0, 0, 35] (       #) . [0, 0, 0, 0, 0, 0, 0, 22] (       )-] is corrupted because keys are not correctly ordered. They should be alphanumerically sorted.");
+    }
+
+    #[test]
+    fn well_formed_children_contain_key_superior_to_ourselves() {
+        let mut f = craft_simple_facet();
+
+        let left = f.arena.get_mut(NodeId::craft(1));
+        // SAFETY: Safe because the two ref accesses different elements
+        // We "unlink" the lifetime coming from the arena so we can take a
+        // second mutable reference while still holding one on left
+        let left: &'static mut Node = unsafe { std::mem::transmute(left) };
+        let right = f.arena.get_mut(NodeId::craft(4));
+
+        std::mem::swap(
+            left.keys.first_mut().unwrap(),
+            right.keys.first_mut().unwrap(),
+        );
+        let errors = f.assert_well_formed().unwrap_err();
+        insta::assert_snapshot!(Wfe(&errors), @r"
+        Node [] is corrupted because children at index 0 contains the key 45 which is superior to our current key 35 when it should be inferior
+        Node [] is corrupted because children at index 1 contains the key 22 which is inferior to our current key 35 when it should be superior
+        Node [[0, 0, 0, 0, 0, 0, 0, 35] (       #)-] is corrupted because children at index 0 contains the key 41 which is superior to our current key 22 when it should be inferior
+        Node [-[0, 0, 0, 0, 0, 0, 0, 35] (       #)] is corrupted because children at index 1 contains the key 24 which is inferior to our current key 45 when it should be superior
+        ");
     }
 
     #[test]
