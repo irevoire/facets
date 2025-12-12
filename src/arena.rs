@@ -1,6 +1,6 @@
-use std::{fmt::Debug, marker::PhantomData};
+use std::{fmt::Debug, hash::Hash, marker::PhantomData};
 
-#[derive(Default, Hash)]
+#[derive(Default)]
 #[repr(transparent)]
 pub struct ArenaId<T>(usize, PhantomData<T>);
 
@@ -17,6 +17,12 @@ impl<T> PartialEq for ArenaId<T> {
 }
 
 impl<T> Eq for ArenaId<T> {}
+
+impl<T> Hash for ArenaId<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
 
 impl<T> ArenaId<T> {
     /// Ideally, you should craft the arena id yourself and allocate new node

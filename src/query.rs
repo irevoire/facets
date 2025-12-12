@@ -131,13 +131,13 @@ impl Display for Query {
             ),
             Query::Equal(key) => write!(f, "{key}"),
             Query::GreaterThan(bound) => match bound {
-                Bound::Included(key) => write!(f, "> {key}"),
-                Bound::Excluded(key) => write!(f, ">= {key}"),
+                Bound::Included(key) => write!(f, ">= {key}"),
+                Bound::Excluded(key) => write!(f, "> {key}"),
                 Bound::Unbounded => write!(f, ">?"),
             },
             Query::LessThan(bound) => match bound {
-                Bound::Included(key) => write!(f, "< {key}"),
-                Bound::Excluded(key) => write!(f, "<= {key}"),
+                Bound::Included(key) => write!(f, "<= {key}"),
+                Bound::Excluded(key) => write!(f, "< {key}"),
                 Bound::Unbounded => write!(f, "<?"),
             },
             Query::Range { start, end } => {
