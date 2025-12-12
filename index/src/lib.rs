@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fmt::{self, Debug, Display};
 use std::ops::{Bound, RangeBounds};
 
-use btree::BTree;
+use btree::{BTree, BatchInsert};
 use csv::ReaderBuilder;
 use facets::key::Key;
 use facets::query::Query;
@@ -366,11 +366,23 @@ impl Index {
             .from_reader(data.as_bytes());
 
         let mut data = HashMap::new();
+        let mut batch_insert = HashMap::new();
 
         let header = rdr.headers()?.clone();
         let headers: Vec<_> = header.iter().map(|s| s.to_string()).collect();
         for header in &headers {
-            data.insert(header.clone().to_string(), Storage::new_btree());
+            data.entry(header.clone().to_string())
+                .insert_entry(Storage::new_btree());
+        }
+
+        for (key, storage) in data.iter_mut() {
+            let batch = match storage {
+                Storage::Simple(_simple) => continue,
+                Storage::Saute(_saute) => continue,
+                Storage::BTree(btree) => btree.batch_insert(),
+            };
+            let batch: BatchInsert<'static> = unsafe { std::mem::transmute(batch) };
+            batch_insert.insert(key.clone().to_string(), batch);
         }
 
         let mut documents = vec![];
@@ -389,10 +401,18 @@ impl Index {
                     Ok(number) => Key::from(number),
                     Err(_) => Key::from(entry),
                 };
-                let storage = data.get_mut(&headers[column]).unwrap();
-                storage.insert(key, value.clone());
+                if let Some(batch) = batch_insert.get_mut(&headers[column]) {
+                    batch.insert(key, idx as u32);
+                } else {
+                    let storage = data.get_mut(&headers[column]).unwrap();
+                    storage.insert(key, value.clone());
+                }
             }
             documents.push((record[0].to_string(), columns));
+        }
+
+        for batch in batch_insert {
+            batch.1.build();
         }
 
         for (_, storage) in data.iter_mut() {

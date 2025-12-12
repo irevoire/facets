@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{fmt::Display, ops::Bound};
+use std::{collections::HashMap, fmt::Display, ops::Bound};
 
 use facets::{key::Key, query::Query};
 use roaring::RoaringBitmap;
@@ -9,6 +9,27 @@ pub struct BTree {
     order: usize,
     root_idx: NodeId,
     arena: Nodes,
+    must_be_built: bool,
+}
+
+pub struct BatchInsert<'btree> {
+    btree: &'btree mut BTree,
+    elements: HashMap<Key, Vec<u32>>,
+}
+
+impl BatchInsert<'_> {
+    pub fn insert(&mut self, key: Key, value: u32) {
+        self.elements.entry(key).or_default().push(value);
+    }
+
+    pub fn build(self) {
+        let Self { btree, elements } = self;
+        for (key, mut value) in elements {
+            value.sort_unstable();
+            btree.insert(key, RoaringBitmap::from_sorted_iter(value).unwrap());
+        }
+        btree.must_be_built = false;
+    }
 }
 
 type Nodes = facets::arena::Arena<Node>;
@@ -567,6 +588,7 @@ impl BTree {
             order: 8,
             root_idx: root,
             arena: nodes,
+            must_be_built: false,
         }
     }
 
@@ -579,6 +601,7 @@ impl BTree {
             order,
             root_idx: root,
             arena: nodes,
+            must_be_built: false,
         }
     }
 
@@ -614,12 +637,27 @@ impl BTree {
 
     /// Process a query and return all the matching identifiers.
     pub fn query(&self, query: &Query) -> RoaringBitmap {
+        assert!(
+            !self.must_be_built,
+            "Tried to query a btree that was not build"
+        );
         self.root().query(query, &self.arena)
     }
 
     /// Return `true` if the btree is empty, `false` otherwise.
     pub fn is_empty(&self) -> bool {
         self.root().keys.is_empty()
+    }
+
+    /// Let you add a document to the btree without indexing it.
+    /// In order to do a query in the btree afterward you'll need to call the
+    /// build method.
+    pub fn batch_insert(&mut self) -> BatchInsert {
+        self.must_be_built = true;
+        BatchInsert {
+            btree: self,
+            elements: HashMap::new(),
+        }
     }
 
     pub fn insert(&mut self, key: Key, value: RoaringBitmap) {
