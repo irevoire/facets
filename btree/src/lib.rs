@@ -1,7 +1,7 @@
 use core::fmt;
-use std::{collections::HashMap, fmt::Display, ops::Bound};
+use std::{fmt::Display, ops::Bound};
 
-use facets::{key::Key, query::Query};
+use facets::{facet::Facet, key::Key, query::Query};
 use roaring::RoaringBitmap;
 
 //#[derive(Debug)]
@@ -9,27 +9,6 @@ pub struct BTree {
     order: usize,
     root_idx: NodeId,
     arena: Nodes,
-    must_be_built: bool,
-}
-
-pub struct BatchInsert<'btree> {
-    btree: &'btree mut BTree,
-    elements: HashMap<Key, Vec<u32>>,
-}
-
-impl BatchInsert<'_> {
-    pub fn insert(&mut self, key: Key, value: u32) {
-        self.elements.entry(key).or_default().push(value);
-    }
-
-    pub fn build(self) {
-        let Self { btree, elements } = self;
-        for (key, mut value) in elements {
-            value.sort_unstable();
-            btree.insert(key, RoaringBitmap::from_sorted_iter(value).unwrap());
-        }
-        btree.must_be_built = false;
-    }
 }
 
 type Nodes = facets::arena::Arena<Node>;
@@ -588,7 +567,6 @@ impl BTree {
             order: 8,
             root_idx: root,
             arena: nodes,
-            must_be_built: false,
         }
     }
 
@@ -601,7 +579,6 @@ impl BTree {
             order,
             root_idx: root,
             arena: nodes,
-            must_be_built: false,
         }
     }
 
@@ -631,127 +608,9 @@ impl BTree {
         self.arena.get_mut(self.root_idx)
     }
 
-    pub fn apply(&mut self) {
-        Node::recalculate_sum(self.root_idx, &mut self.arena);
-    }
-
-    /// Process a query and return all the matching identifiers.
-    pub fn query(&self, query: &Query) -> RoaringBitmap {
-        assert!(
-            !self.must_be_built,
-            "Tried to query a btree that was not build"
-        );
-        self.root().query(query, &self.arena)
-    }
-
     /// Return `true` if the btree is empty, `false` otherwise.
     pub fn is_empty(&self) -> bool {
         self.root().keys.is_empty()
-    }
-
-    /// Let you add a document to the btree without indexing it.
-    /// In order to do a query in the btree afterward you'll need to call the
-    /// build method.
-    pub fn batch_insert(&mut self) -> BatchInsert {
-        self.must_be_built = true;
-        BatchInsert {
-            btree: self,
-            elements: HashMap::new(),
-        }
-    }
-
-    pub fn insert(&mut self, key: Key, value: RoaringBitmap) {
-        let mut insertion_target = None;
-        Node::explore_toward(self.root_idx, &key, &self.arena, |n, step| {
-            match step {
-                ExplorationStep::FinalExact { .. } | ExplorationStep::FinalMiss { .. } => {
-                    insertion_target = Some((n.arena_idx, step));
-                }
-                ExplorationStep::Dive { .. } => { /* do nothing */ }
-            }
-        });
-        let (id, step) = insertion_target.unwrap();
-        match step {
-            ExplorationStep::Dive { .. } => {
-                let node = self.arena.get(id);
-                unreachable!("Should not happen, [{node}] is not a leaf node!",)
-            }
-            ExplorationStep::FinalExact { key_idx } => {
-                let node = self.arena.get_mut(id);
-                node.values[key_idx] |= &value;
-                node.dirty = true;
-            }
-            ExplorationStep::FinalMiss { key_idx } => {
-                let mut loop_idx = key_idx;
-                let mut loop_key = key;
-                let mut loop_value = value;
-                let mut loop_node_id = id;
-                let mut loop_children = vec![];
-                loop {
-                    // First, we insert the key/value pair into the node, and reconnect any dangling children
-                    let node = self.arena.get_mut(loop_node_id);
-                    node.keys.insert(loop_idx, loop_key.clone());
-                    node.values.insert(loop_idx, loop_value.clone());
-                    if node.children.is_empty() {
-                        node.children = loop_children;
-                    } else {
-                        node.children = node
-                            .children
-                            .iter()
-                            .take(loop_idx)
-                            .chain(loop_children.iter())
-                            .chain(node.children.iter().skip(loop_idx + 1))
-                            .cloned()
-                            .collect();
-                    }
-                    node.dirty = true;
-
-                    // If we're not oversized, we're done and we can exit here
-                    if self.arena.get(loop_node_id).keys.len() <= self.order {
-                        break;
-                    }
-
-                    // Otherwise we need to split the node at the midpoint
-                    // This gives us the median key/value pair, as well as two new nodes for the left and right side
-                    let NodeSplit {
-                        key,
-                        value,
-                        parent,
-                        left,
-                        right,
-                    } = Node::split_at(loop_node_id, self.order / 2, &mut self.arena);
-
-                    // These become the key/value pair and the dangling children we'll need to reconnect
-                    loop_key = key;
-                    loop_value = value;
-                    loop_children = vec![left, right];
-
-                    // Now we find the node we're going to insert these new values into
-                    //self.arena.delete(loop_node_id);
-                    loop_node_id = match parent {
-                        Some(parent) => {
-                            let node = self.arena.get(parent);
-                            let ExplorationStep::Dive { child_idx } =
-                                node.next_step_toward(&loop_key)
-                            else {
-                                unreachable!("This shouldn't happen");
-                            };
-                            loop_idx = child_idx;
-                            parent
-                        }
-                        None => {
-                            self.root_idx = self.arena.empty_entry();
-                            self.arena.get_mut(self.root_idx).arena_idx = self.root_idx;
-                            loop_idx = 0;
-                            self.root_idx
-                        }
-                    };
-
-                    self.arena.get_mut(left).parent = Some(loop_node_id);
-                    self.arena.get_mut(right).parent = Some(loop_node_id);
-                }
-            }
-        }
     }
 
     /// Make sure the whole btree is well formed. Will explore all nodes and
@@ -936,6 +795,110 @@ impl BTree {
             Ok(())
         } else {
             Err(errors)
+        }
+    }
+}
+
+impl Facet for BTree {
+    fn apply(&mut self) {
+        Node::recalculate_sum(self.root_idx, &mut self.arena);
+    }
+
+    fn query(&self, query: &Query) -> RoaringBitmap {
+        self.root().query(query, &self.arena)
+    }
+
+    fn insert(&mut self, key: Key, value: RoaringBitmap) {
+        let mut insertion_target = None;
+        Node::explore_toward(self.root_idx, &key, &self.arena, |n, step| {
+            match step {
+                ExplorationStep::FinalExact { .. } | ExplorationStep::FinalMiss { .. } => {
+                    insertion_target = Some((n.arena_idx, step));
+                }
+                ExplorationStep::Dive { .. } => { /* do nothing */ }
+            }
+        });
+        let (id, step) = insertion_target.unwrap();
+        match step {
+            ExplorationStep::Dive { .. } => {
+                let node = self.arena.get(id);
+                unreachable!("Should not happen, [{node}] is not a leaf node!",)
+            }
+            ExplorationStep::FinalExact { key_idx } => {
+                let node = self.arena.get_mut(id);
+                node.values[key_idx] |= &value;
+                node.dirty = true;
+            }
+            ExplorationStep::FinalMiss { key_idx } => {
+                let mut loop_idx = key_idx;
+                let mut loop_key = key;
+                let mut loop_value = value;
+                let mut loop_node_id = id;
+                let mut loop_children = vec![];
+                loop {
+                    // First, we insert the key/value pair into the node, and reconnect any dangling children
+                    let node = self.arena.get_mut(loop_node_id);
+                    node.keys.insert(loop_idx, loop_key.clone());
+                    node.values.insert(loop_idx, loop_value.clone());
+                    if node.children.is_empty() {
+                        node.children = loop_children;
+                    } else {
+                        node.children = node
+                            .children
+                            .iter()
+                            .take(loop_idx)
+                            .chain(loop_children.iter())
+                            .chain(node.children.iter().skip(loop_idx + 1))
+                            .cloned()
+                            .collect();
+                    }
+                    node.dirty = true;
+
+                    // If we're not oversized, we're done and we can exit here
+                    if self.arena.get(loop_node_id).keys.len() <= self.order {
+                        break;
+                    }
+
+                    // Otherwise we need to split the node at the midpoint
+                    // This gives us the median key/value pair, as well as two new nodes for the left and right side
+                    let NodeSplit {
+                        key,
+                        value,
+                        parent,
+                        left,
+                        right,
+                    } = Node::split_at(loop_node_id, self.order / 2, &mut self.arena);
+
+                    // These become the key/value pair and the dangling children we'll need to reconnect
+                    loop_key = key;
+                    loop_value = value;
+                    loop_children = vec![left, right];
+
+                    // Now we find the node we're going to insert these new values into
+                    //self.arena.delete(loop_node_id);
+                    loop_node_id = match parent {
+                        Some(parent) => {
+                            let node = self.arena.get(parent);
+                            let ExplorationStep::Dive { child_idx } =
+                                node.next_step_toward(&loop_key)
+                            else {
+                                unreachable!("This shouldn't happen");
+                            };
+                            loop_idx = child_idx;
+                            parent
+                        }
+                        None => {
+                            self.root_idx = self.arena.empty_entry();
+                            self.arena.get_mut(self.root_idx).arena_idx = self.root_idx;
+                            loop_idx = 0;
+                            self.root_idx
+                        }
+                    };
+
+                    self.arena.get_mut(left).parent = Some(loop_node_id);
+                    self.arena.get_mut(right).parent = Some(loop_node_id);
+                }
+            }
         }
     }
 }

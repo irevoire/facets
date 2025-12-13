@@ -16,3 +16,6 @@ proptest = "1.0.0"
 [dependencies]
 roaring = { workspace = true }
 thiserror = { workspace = true }
+
+[profile.release]
+debug = true

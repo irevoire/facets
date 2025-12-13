@@ -3,69 +3,51 @@ use std::error::Error;
 use std::fmt::{self, Debug, Display};
 use std::ops::{Bound, RangeBounds};
 
-use btree::{BTree, BatchInsert};
+use btree::BTree;
 use csv::ReaderBuilder;
+use facets::facet::Facet;
 use facets::key::Key;
 use facets::query::Query;
 use roaring::RoaringBitmap;
 use saute::Saute;
 use simple::Simple;
 
-enum Storage {
-    #[allow(unused)]
-    Simple(Simple),
-    #[allow(unused)]
-    Saute(Saute),
-    BTree(BTree),
+struct Storage {
+    data: Box<dyn Facet>,
 }
 
 impl Storage {
     #[allow(unused)]
     pub fn new_simple() -> Self {
-        Self::Simple(Simple::new())
+        Self {
+            data: Box::new(Simple::new()),
+        }
     }
     #[allow(unused)]
     pub fn new_saute() -> Self {
-        Self::Saute(Saute::new())
+        Self {
+            data: Box::new(Saute::new()),
+        }
     }
+    #[allow(unused)]
     pub fn new_btree() -> Self {
-        Self::BTree(BTree::with_order(64))
-    }
-
-    pub fn apply(&mut self) {
-        match self {
-            Storage::Simple(_) => (),
-            Storage::Saute(_) => (),
-            Storage::BTree(btree) => btree.apply(),
-        }
-    }
-
-    pub fn insert(&mut self, key: Key, value: RoaringBitmap) {
-        match self {
-            Storage::Simple(simple) => simple.insert(key, value),
-            Storage::Saute(saute) => {
-                saute.insert(saute::Key { bytes: key.bytes }, value);
-            }
-            Storage::BTree(btree) => btree.insert(key, value),
-        }
-    }
-
-    pub fn query(&self, query: &Query) -> RoaringBitmap {
-        match self {
-            Storage::Simple(simple) => simple.query(query),
-            Storage::Saute(saute) => saute.query(query),
-            Storage::BTree(btree) => btree.query(query),
+        Self {
+            data: Box::new(BTree::with_order(64)),
         }
     }
 }
 
-impl Display for Storage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Storage::Simple(_) => write!(f, "simple"),
-            Storage::Saute(_) => write!(f, "saute"),
-            Storage::BTree(btree) => write!(f, "{}", btree),
-        }
+impl Facet for Storage {
+    fn apply(&mut self) {
+        self.data.apply();
+    }
+
+    fn insert(&mut self, key: Key, ids: RoaringBitmap) {
+        self.data.insert(key, ids);
+    }
+
+    fn query(&self, query: &Query) -> RoaringBitmap {
+        self.data.query(query)
     }
 }
 
@@ -320,7 +302,7 @@ impl SearchQuery {
 }
 
 pub struct SearchResults<'a> {
-    index: usize,
+    idx: u32,
     results: RoaringBitmap,
     data: &'a Index,
 }
@@ -329,9 +311,12 @@ impl<'a> Iterator for SearchResults<'a> {
     type Item = (String, Vec<(String, String)>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let idx = self.index;
-        self.index += 1;
-        self.data.documents.get(idx).cloned()
+        let i = self.idx;
+        self.idx += 1;
+        self.data
+            .documents
+            .get(self.results.select(i)? as usize)
+            .cloned()
     }
 }
 
@@ -355,41 +340,84 @@ impl fmt::Display for SearchQuery {
 pub struct Index {
     used_ids: RoaringBitmap,
     documents: Vec<(String, Vec<(String, String)>)>,
-    data: HashMap<String, Storage>,
+    data: HashMap<String, Box<dyn Facet>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum StorageKind {
+    Simple,
+    Saute,
+    BTree(usize),
+}
+
+#[derive(Debug)]
+pub struct IndexConfig {
+    pub storage: StorageKind,
+    pub use_batching: bool,
+}
+
+impl Default for IndexConfig {
+    fn default() -> Self {
+        Self {
+            storage: StorageKind::BTree(64),
+            use_batching: true,
+        }
+    }
 }
 
 impl Index {
-    pub fn from_csv(data: String, delimiter: u8) -> Result<Self, Box<dyn Error>> {
+    pub fn len(&self) -> usize {
+        self.documents.len()
+    }
+
+    pub fn fields(&self) -> Vec<String> {
+        self.data.keys().cloned().collect::<Vec<_>>()
+    }
+
+    pub fn consult(&self, field: &str, document: usize) -> String {
+        self.documents[document]
+            .1
+            .iter()
+            .cloned()
+            .find_map(|(f, v)| if f == field { Some(v) } else { None })
+            .unwrap()
+    }
+
+    pub fn from_csv(
+        data: String,
+        delimiter: u8,
+        progress: Option<&dyn Fn(usize, usize) -> ()>,
+        config: Option<IndexConfig>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let config = config.unwrap_or_default();
         let lines = data.lines().count();
         let mut rdr = ReaderBuilder::new()
             .delimiter(delimiter)
             .from_reader(data.as_bytes());
 
-        let mut data = HashMap::new();
-        let mut batch_insert = HashMap::new();
+        let mut data: HashMap<String, Box<dyn Facet>> = HashMap::new();
+        let mut batches: HashMap<String, HashMap<Key, Vec<u32>>> = HashMap::new();
 
         let header = rdr.headers()?.clone();
         let headers: Vec<_> = header.iter().map(|s| s.to_string()).collect();
         for header in &headers {
-            data.entry(header.clone().to_string())
-                .insert_entry(Storage::new_btree());
+            let storage: Box<dyn Facet> = match config.storage {
+                StorageKind::Simple => Box::new(Simple::new()),
+                StorageKind::Saute => Box::new(Saute::new()),
+                StorageKind::BTree(order) => Box::new(BTree::with_order(order)),
+            };
+            data.entry(header.clone().to_string()).insert_entry(storage);
         }
 
-        for (key, storage) in data.iter_mut() {
-            let batch = match storage {
-                Storage::Simple(_simple) => continue,
-                Storage::Saute(_saute) => continue,
-                Storage::BTree(btree) => btree.batch_insert(),
-            };
-            let batch: BatchInsert<'static> = unsafe { std::mem::transmute(batch) };
-            batch_insert.insert(key.clone().to_string(), batch);
+        for (key, _) in data.iter_mut() {
+            batches.insert(key.clone().to_string(), HashMap::new());
         }
 
         let mut documents = vec![];
 
         for (idx, result) in rdr.records().enumerate() {
-            if idx % 1000 == 0 {
-                println!("{idx}/{lines}");
+            if let Some(ref progress) = progress {
+                progress(idx, lines);
             }
             let record = result?;
             let value: RoaringBitmap =
@@ -401,8 +429,14 @@ impl Index {
                     Ok(number) => Key::from(number),
                     Err(_) => Key::from(entry),
                 };
-                if let Some(batch) = batch_insert.get_mut(&headers[column]) {
-                    batch.insert(key, idx as u32);
+                if config.use_batching
+                    && let Some(batch) = batches.get_mut(&headers[column])
+                {
+                    if let Some(entry) = batch.get_mut(&key) {
+                        entry.push(idx as u32);
+                    } else {
+                        batch.insert(key, vec![idx as u32]);
+                    }
                 } else {
                     let storage = data.get_mut(&headers[column]).unwrap();
                     storage.insert(key, value.clone());
@@ -411,8 +445,8 @@ impl Index {
             documents.push((record[0].to_string(), columns));
         }
 
-        for batch in batch_insert {
-            batch.1.build();
+        for (header, batch) in batches {
+            data.get_mut(&header).unwrap().batch_insert(batch);
         }
 
         for (_, storage) in data.iter_mut() {
@@ -426,18 +460,17 @@ impl Index {
         })
     }
 
-    fn field(&self, field: &str) -> Option<&Storage> {
-        self.data.get(field)
+    fn field(&self, field: &str) -> Option<&dyn Facet> {
+        self.data.get(field).map(|v| &**v)
     }
 
-    fn get_bitmap(&self, query: &SearchQuery) -> Result<RoaringBitmap, QueryError> {
-        query.execute(self)
-    }
-
-    pub fn execute(&self, query: &SearchQuery) -> Result<SearchResults, QueryError> {
+    pub fn execute<'index>(
+        &'index self,
+        query: &SearchQuery,
+    ) -> Result<SearchResults<'index>, QueryError> {
         let results = query.execute(self)?;
         Ok(SearchResults {
-            index: 0,
+            idx: 0,
             results,
             data: self,
         })
@@ -448,7 +481,7 @@ impl Display for Index {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Documents:\n{:<10} {}\n{}\n\nStorage:\n{}",
+            "Documents:\n{:<10} {}\n{}",
             "---",
             self.documents[0]
                 .1
@@ -468,11 +501,6 @@ impl Display for Index {
                             .join(" ")
                     )
                 })
-                .collect::<Vec<_>>()
-                .join("\n"),
-            self.data
-                .keys()
-                .map(|key| { format!("{key}:\n{}", self.data.get(key).unwrap()) })
                 .collect::<Vec<_>>()
                 .join("\n"),
         )

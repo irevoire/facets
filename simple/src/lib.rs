@@ -1,4 +1,4 @@
-use facets::{key::Key, query::Query};
+use facets::{facet::Facet, key::Key, query::Query};
 use roaring::RoaringBitmap;
 
 /// The simplest datastructure possible. It's just a sorted vector.
@@ -11,8 +11,11 @@ impl Simple {
     pub fn new() -> Self {
         Self::default()
     }
+}
 
-    pub fn insert(&mut self, key: Key, ids: RoaringBitmap) {
+impl Facet for Simple {
+    fn apply(&mut self) {}
+    fn insert(&mut self, key: Key, ids: RoaringBitmap) {
         match self.inner.binary_search_by_key(&&key, |(k, _)| k) {
             Ok(idx) => {
                 self.inner[idx].1 |= ids;
@@ -23,7 +26,7 @@ impl Simple {
         }
     }
 
-    pub fn query(&self, query: &Query) -> RoaringBitmap {
+    fn query(&self, query: &Query) -> RoaringBitmap {
         match query {
             Query::All => self
                 .inner
@@ -92,6 +95,7 @@ impl Simple {
 mod test {
     use std::ops::Bound;
 
+    use facets::facet::Facet;
     use facets::query::Query;
     use roaring::RoaringBitmap;
 
