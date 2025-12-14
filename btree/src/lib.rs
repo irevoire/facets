@@ -1200,6 +1200,7 @@ mod test {
         };
 
         BTree {
+            must_be_built: false,
             order: 3,
             root_idx: NodeId::craft(0),
             arena: Arena::craft_from(vec![

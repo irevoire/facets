@@ -88,7 +88,7 @@ impl<Entry> Arena<Entry> {
     pub fn get(&self, id: ArenaId<Entry>) -> &Entry {
         self.nodes[id.0]
             .as_ref()
-            .expect(&format!("{} does not exist", id.0))
+            .unwrap_or_else(|| panic!("{} does not exist", id.0))
     }
 
     pub fn get_mut(&mut self, id: ArenaId<Entry>) -> &mut Entry {

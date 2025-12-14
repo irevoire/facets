@@ -330,7 +330,7 @@ impl fmt::Display for SearchQuery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Filter: ")?;
         match self.filter {
-            Some(ref filter) => write!(f, "{}", filter)?,
+            Some(ref filter) => write!(f, "{filter}")?,
             None => write!(f, "no filter")?,
         }
         Ok(())

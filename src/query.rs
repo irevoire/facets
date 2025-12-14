@@ -110,7 +110,7 @@ impl Display for Query {
         match self {
             Query::All => write!(f, "all"),
             Query::None => write!(f, "none"),
-            Query::Not(query) => write!(f, "!{}", query),
+            Query::Not(query) => write!(f, "!{query}"),
             Query::Or(items) => write!(
                 f,
                 "{}",
@@ -144,12 +144,12 @@ impl Display for Query {
                 let start = match start {
                     Bound::Included(key) => format!("[{key}"),
                     Bound::Excluded(key) => format!("({key}"),
-                    Bound::Unbounded => format!(".."),
+                    Bound::Unbounded => "..".to_string(),
                 };
                 let end = match end {
                     Bound::Included(key) => format!("{key}]"),
                     Bound::Excluded(key) => format!("{key})"),
-                    Bound::Unbounded => format!(".."),
+                    Bound::Unbounded => "..".to_string(),
                 };
                 write!(f, "{start}, {end}")
             }
