@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{fmt::Display, ops::Bound};
+use std::{borrow::Cow, fmt::Display, ops::Bound};
 
 use facets::{facet::Facet, key::Key, query::Query};
 use roaring::RoaringBitmap;
@@ -126,12 +126,12 @@ impl Node {
         this.dirty = false;
     }
 
-    fn query(&self, query: &Query, arena: &Nodes) -> RoaringBitmap {
+    fn query<'a>(&'a self, query: &Query, arena: &Nodes) -> Cow<'a, RoaringBitmap> {
         debug_assert!(!self.dirty, "Dirty node was queried");
         match query {
-            Query::All => self.sum.clone(),
-            Query::None => RoaringBitmap::new(),
-            Query::Not(query) => self.sum.clone() - self.query(query, arena),
+            Query::All => Cow::Borrowed(&self.sum),
+            Query::None => Cow::Owned(RoaringBitmap::new()),
+            Query::Not(query) => Cow::Owned(&self.sum - self.query(query, arena).as_ref()),
             Query::Or(query) => {
                 let maximum_values = self.sum.len();
 
@@ -140,23 +140,23 @@ impl Node {
                     if acc.len() == maximum_values {
                         break;
                     }
-                    acc |= self.query(query, arena);
+                    acc |= self.query(query, arena).as_ref();
                 }
-                acc
+                Cow::Owned(acc)
             }
             Query::And(query) => {
                 let mut acc = RoaringBitmap::new();
                 let mut query = query.iter();
                 if let Some(query) = query.next() {
-                    acc |= self.query(query, arena);
+                    acc |= self.query(query, arena).as_ref();
                 }
                 for query in query {
                     if acc.is_empty() {
                         break;
                     }
-                    acc &= self.query(query, arena);
+                    acc &= self.query(query, arena).as_ref();
                 }
-                acc
+                Cow::Owned(acc)
             }
             Query::Equal(key) => {
                 let mut acc = RoaringBitmap::new();
@@ -165,11 +165,11 @@ impl Node {
                         acc = node.values[key_idx].clone()
                     }
                 });
-                acc
+                Cow::Owned(acc)
             }
             Query::GreaterThan(key) => {
                 let target = match key {
-                    Bound::Unbounded => return self.sum.clone(),
+                    Bound::Unbounded => return Cow::Borrowed(&self.sum),
                     Bound::Included(k) | Bound::Excluded(k) => k,
                 };
                 let mut acc = RoaringBitmap::new();
@@ -194,11 +194,11 @@ impl Node {
                         }
                     }
                 });
-                acc
+                Cow::Owned(acc)
             }
             Query::LessThan(key) => {
                 let target = match key {
-                    Bound::Unbounded => return self.sum.clone(),
+                    Bound::Unbounded => return Cow::Borrowed(&self.sum),
                     Bound::Included(k) | Bound::Excluded(k) => k,
                 };
                 let mut acc = RoaringBitmap::new();
@@ -223,7 +223,7 @@ impl Node {
                         }
                     }
                 });
-                acc
+                Cow::Owned(acc)
             }
             Query::Range { start, end } => {
                 // transform and sanitize:
@@ -243,12 +243,12 @@ impl Node {
                         return self.query(&Query::Equal(start.clone()), arena);
                     }
                     (Bound::Included(start), Bound::Included(end)) if start > end => {
-                        return RoaringBitmap::new();
+                        return Cow::Owned(RoaringBitmap::new());
                     }
                     (
                         Bound::Included(start) | Bound::Excluded(start),
                         Bound::Included(end) | Bound::Excluded(end),
-                    ) if start >= end => return RoaringBitmap::new(),
+                    ) if start >= end => return Cow::Owned(RoaringBitmap::new()),
                     (
                         Bound::Included(start) | Bound::Excluded(start),
                         Bound::Included(end) | Bound::Excluded(end),
@@ -280,7 +280,7 @@ impl Node {
                             for &child in node.children.iter().take(right + 1).skip(left + 1) {
                                 acc |= &arena.get(child).sum;
                             }
-                            return acc;
+                            return Cow::Owned(acc);
                         }
                         (
                             ExplorationStep::FinalExact { key_idx: left },
@@ -293,7 +293,7 @@ impl Node {
                             for &child in node.children.iter().take(right).skip(left + 1) {
                                 acc |= &arena.get(child).sum;
                             }
-                            return acc;
+                            return Cow::Owned(acc);
                         }
                         (
                             ExplorationStep::FinalMiss { key_idx: left },
@@ -307,7 +307,7 @@ impl Node {
                             for &child in node.children.iter().take(right + 1).skip(left + 1) {
                                 acc |= &arena.get(child).sum;
                             }
-                            return acc;
+                            return Cow::Owned(acc);
                         }
                         (
                             ExplorationStep::FinalMiss { key_idx: left },
@@ -319,7 +319,7 @@ impl Node {
                             for &child in node.children.iter().take(right).skip(left + 1) {
                                 acc |= &arena.get(child).sum;
                             }
-                            return acc;
+                            return Cow::Owned(acc);
                         }
 
                         // OTHER
@@ -336,8 +336,9 @@ impl Node {
                             }
                             acc |= arena
                                 .get(node.children[right])
-                                .query(&Query::LessThan(end.clone()), arena);
-                            return acc;
+                                .query(&Query::LessThan(end.clone()), arena)
+                                .as_ref();
+                            return Cow::Owned(acc);
                         }
                         (
                             ExplorationStep::FinalMiss { key_idx: left },
@@ -351,8 +352,9 @@ impl Node {
                             }
                             acc |= arena
                                 .get(node.children[right])
-                                .query(&Query::LessThan(end.clone()), arena);
-                            return acc;
+                                .query(&Query::LessThan(end.clone()), arena)
+                                .as_ref();
+                            return Cow::Owned(acc);
                         }
                         (
                             ExplorationStep::Dive { child_idx: left },
@@ -368,8 +370,9 @@ impl Node {
                             }
                             acc |= arena
                                 .get(node.children[left])
-                                .query(&Query::GreaterThan(start.clone()), arena);
-                            return acc;
+                                .query(&Query::GreaterThan(start.clone()), arena)
+                                .as_ref();
+                            return Cow::Owned(acc);
                         }
                         (
                             ExplorationStep::Dive { child_idx: left },
@@ -383,8 +386,9 @@ impl Node {
                             }
                             acc |= arena
                                 .get(node.children[left])
-                                .query(&Query::GreaterThan(start.clone()), arena);
-                            return acc;
+                                .query(&Query::GreaterThan(start.clone()), arena)
+                                .as_ref();
+                            return Cow::Owned(acc);
                         }
                         // RECURSE HERE
                         (
@@ -411,16 +415,18 @@ impl Node {
                             }
                             acc |= arena
                                 .get(node.children[left])
-                                .query(&Query::GreaterThan(start.clone()), arena);
+                                .query(&Query::GreaterThan(start.clone()), arena)
+                                .as_ref();
                             acc |= arena
                                 .get(node.children[right])
-                                .query(&Query::LessThan(end.clone()), arena);
-                            return acc;
+                                .query(&Query::LessThan(end.clone()), arena)
+                                .as_ref();
+                            return Cow::Owned(acc);
                         }
                     }
                 }
 
-                acc
+                Cow::Owned(acc)
             }
         }
     }
@@ -804,7 +810,7 @@ impl Facet for BTree {
         Node::recalculate_sum(self.root_idx, &mut self.arena);
     }
 
-    fn query(&self, query: &Query) -> RoaringBitmap {
+    fn query<'a>(&'a self, query: &Query) -> Cow<'a, RoaringBitmap> {
         self.root().query(query, &self.arena)
     }
 
@@ -1327,7 +1333,7 @@ mod test {
         for &(key, value) in DATA {
             assert_eq!(
                 facet.query(&Query::Equal(key.into())),
-                RoaringBitmap::from_iter([value])
+                Cow::Owned(RoaringBitmap::from_iter([value]))
             );
         }
     }
@@ -1895,50 +1901,50 @@ mod test {
             // Excluded x Excluded
             let greater_than_ret = f.query(&Query::GreaterThan(Bound::Excluded(greater_than.into())));
             let less_than_ret = f.query(&Query::LessThan(Bound::Excluded(less_than.into())));
-            let expected_range = greater_than_ret & less_than_ret;
+            let expected_range = greater_than_ret.as_ref() & less_than_ret.as_ref();
 
             let range_ret = f.query(&Query::Range {
                 start: Bound::Excluded(greater_than.into()),
                 end: Bound::Excluded(less_than.into()),
             });
 
-            prop_assert_eq!(expected_range, range_ret);
+            prop_assert_eq!(Cow::Borrowed(&expected_range), range_ret);
 
             // Included x Excluded
             let greater_than_ret = f.query(&Query::GreaterThan(Bound::Included(greater_than.into())));
             let less_than_ret = f.query(&Query::LessThan(Bound::Excluded(less_than.into())));
-            let expected_range = greater_than_ret & less_than_ret;
+            let expected_range = greater_than_ret.as_ref() & less_than_ret.as_ref();
 
             let range_ret = f.query(&Query::Range {
                 start: Bound::Included(greater_than.into()),
                 end: Bound::Excluded(less_than.into()),
             });
 
-            prop_assert_eq!(expected_range, range_ret);
+            prop_assert_eq!(Cow::Borrowed(&expected_range), range_ret);
 
             // Excluded x Included
             let greater_than_ret = f.query(&Query::GreaterThan(Bound::Excluded(greater_than.into())));
             let less_than_ret = f.query(&Query::LessThan(Bound::Included(less_than.into())));
-            let expected_range = greater_than_ret & less_than_ret;
+            let expected_range = greater_than_ret.as_ref() & less_than_ret.as_ref();
 
             let range_ret = f.query(&Query::Range {
                 start: Bound::Excluded(greater_than.into()),
                 end: Bound::Included(less_than.into()),
             });
 
-            prop_assert_eq!(expected_range, range_ret);
+            prop_assert_eq!(Cow::Borrowed(&expected_range), range_ret);
 
             // Included x Included
             let greater_than_ret = f.query(&Query::GreaterThan(Bound::Included(greater_than.into())));
             let less_than_ret = f.query(&Query::LessThan(Bound::Included(less_than.into())));
-            let expected_range = greater_than_ret & less_than_ret;
+            let expected_range = greater_than_ret.as_ref() & less_than_ret.as_ref();
 
             let range_ret = f.query(&Query::Range {
                 start: Bound::Included(greater_than.into()),
                 end: Bound::Included(less_than.into()),
             });
 
-            prop_assert_eq!(expected_range, range_ret);
+            prop_assert_eq!(Cow::Borrowed(&expected_range), range_ret);
 
         }
 

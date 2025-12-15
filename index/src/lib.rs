@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
@@ -46,7 +47,7 @@ impl Facet for Storage {
         self.data.insert(key, ids);
     }
 
-    fn query(&self, query: &Query) -> RoaringBitmap {
+    fn query<'a>(&'a self, query: &Query) -> Cow<'a, RoaringBitmap> {
         self.data.query(query)
     }
 }
@@ -216,11 +217,13 @@ impl Filter {
         }
     }
 
-    pub fn execute(&self, index: &Index) -> Result<RoaringBitmap, QueryError> {
+    pub fn execute<'a>(&self, index: &'a Index) -> Result<Cow<'a, RoaringBitmap>, QueryError> {
         let ret = match self {
-            Filter::All => index.used_ids.clone(),
-            Filter::None => RoaringBitmap::new(),
-            Filter::Not(filter) => Filter::All.execute(index)? - filter.execute(index)?,
+            Filter::All => Cow::Borrowed(&index.used_ids),
+            Filter::None => Cow::Owned(RoaringBitmap::new()),
+            Filter::Not(filter) => Cow::Owned(
+                Filter::All.execute(index)?.as_ref() - filter.execute(index)?.into_owned(),
+            ),
             Filter::Or(filters) => {
                 let maximum_values = Filter::All.execute(index)?.len();
 
@@ -229,23 +232,23 @@ impl Filter {
                     if acc.len() == maximum_values {
                         break;
                     }
-                    acc |= query.execute(index)?;
+                    acc |= query.execute(index)?.as_ref();
                 }
-                acc
+                Cow::Owned(acc)
             }
             Filter::And(filters) => {
                 let mut acc = RoaringBitmap::new();
                 let mut query = filters.iter();
                 if let Some(query) = query.next() {
-                    acc |= query.execute(index)?;
+                    acc |= query.execute(index)?.as_ref();
                 }
                 for query in query {
                     if acc.is_empty() {
                         break;
                     }
-                    acc &= query.execute(index)?;
+                    acc &= query.execute(index)?.as_ref();
                 }
-                acc
+                Cow::Owned(acc)
             }
             Filter::Equal { field, value } => index
                 .field(field)
@@ -291,11 +294,11 @@ impl SearchQuery {
         self.filter = Some(filter);
     }
 
-    fn execute(&self, index: &Index) -> Result<RoaringBitmap, QueryError> {
+    fn execute<'a>(&self, index: &'a Index) -> Result<Cow<'a, RoaringBitmap>, QueryError> {
         let indices = if let Some(ref filter) = self.filter {
             filter.execute(index)?
         } else {
-            index.used_ids.clone()
+            Cow::Borrowed(&index.used_ids)
         };
         Ok(indices)
     }
@@ -303,7 +306,7 @@ impl SearchQuery {
 
 pub struct SearchResults<'a> {
     idx: u32,
-    results: RoaringBitmap,
+    results: Cow<'a, RoaringBitmap>,
     data: &'a Index,
 }
 

@@ -183,7 +183,7 @@ fn main() {
         println!("Running with config: {config:?}");
         let now = std::time::Instant::now();
         let index = Index::from_csv(lines.to_string(), b',', None, Some(config)).unwrap();
-        println!("Indexed in {:?}", now.elapsed());
+        println!("Indexed in {:.2?}", now.elapsed());
         let now = std::time::Instant::now();
         while now.elapsed() < Duration::from_secs(10) {
             for (i, query) in queries.iter().enumerate().clone() {
@@ -191,7 +191,7 @@ fn main() {
             }
         }
         let time = now.elapsed();
-        println!("Queried in {time:?}\n");
+        println!("Queried in {time:.2?}\n");
         // println!(
         //     "Here are {} results: {}",
         //     if results.len() < 20 {

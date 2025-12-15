@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use roaring::RoaringBitmap;
 
@@ -10,7 +10,7 @@ pub trait Facet {
     /// Insert ids into key
     fn insert(&mut self, key: Key, ids: RoaringBitmap);
     /// Process a query and return all the matching identifiers.
-    fn query(&self, query: &Query) -> RoaringBitmap;
+    fn query<'a>(&'a self, query: &Query) -> Cow<'a, RoaringBitmap>;
     /// Insert a batch of ids into their respective keys
     fn batch_insert(&mut self, batch: HashMap<Key, Vec<u32>>) {
         for (key, value) in batch {

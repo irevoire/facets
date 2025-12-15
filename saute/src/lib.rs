@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use facets::{
     arena::{Arena, ArenaId},
     facet::Facet,
@@ -57,7 +59,7 @@ impl Facet for Saute {
         todo!()
     }
 
-    fn query(&self, query: &Query) -> RoaringBitmap {
+    fn query(&self, _query: &Query) -> Cow<'_, RoaringBitmap> {
         todo!()
     }
 }

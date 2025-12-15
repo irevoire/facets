@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use facets::{facet::Facet, key::Key, query::Query};
 use roaring::RoaringBitmap;
 
@@ -26,14 +28,17 @@ impl Facet for Simple {
         }
     }
 
-    fn query(&self, query: &Query) -> RoaringBitmap {
+    fn query(&self, query: &Query) -> Cow<'_, RoaringBitmap> {
         match query {
-            Query::All => self
-                .inner
-                .iter()
-                .fold(RoaringBitmap::new(), |acc, (_, value)| acc | value),
-            Query::None => RoaringBitmap::new(),
-            Query::Not(query) => self.query(&Query::All) - self.query(query),
+            Query::All => Cow::Owned(
+                self.inner
+                    .iter()
+                    .fold(RoaringBitmap::new(), |acc, (_, value)| acc | value),
+            ),
+            Query::None => Cow::Owned(RoaringBitmap::new()),
+            Query::Not(query) => {
+                Cow::Owned(self.query(&Query::All).as_ref() - self.query(query).into_owned())
+            }
             Query::Or(queries) => {
                 let maximum_values = self.query(&Query::All).len();
 
@@ -42,47 +47,49 @@ impl Facet for Simple {
                     if acc.len() == maximum_values {
                         break;
                     }
-                    acc |= self.query(query);
+                    acc |= self.query(query).as_ref();
                 }
-                acc
+                Cow::Owned(acc)
             }
             Query::And(queries) => {
                 let mut acc = RoaringBitmap::new();
                 let mut query = queries.iter();
                 if let Some(query) = query.next() {
-                    acc |= self.query(query);
+                    acc |= self.query(query).as_ref();
                 }
                 for query in query {
                     if acc.is_empty() {
                         break;
                     }
-                    acc &= self.query(query);
+                    acc &= self.query(query).as_ref();
                 }
-                acc
+                Cow::Owned(acc)
             }
             Query::Equal(key) => match self.inner.binary_search_by_key(&key, |(k, _)| k) {
-                Ok(idx) => self.inner[idx].1.clone(),
-                Err(_) => RoaringBitmap::new(),
+                Ok(idx) => Cow::Borrowed(&self.inner[idx].1),
+                Err(_) => Cow::Owned(RoaringBitmap::new()),
             },
-            Query::GreaterThan(bound) => self
-                .inner
-                .iter()
-                .rev()
-                .take_while(|(k, _)| match bound {
-                    std::ops::Bound::Included(key) => k >= key,
-                    std::ops::Bound::Excluded(key) => k > key,
-                    std::ops::Bound::Unbounded => true,
-                })
-                .fold(RoaringBitmap::new(), |acc, (_, v)| acc | v),
-            Query::LessThan(bound) => self
-                .inner
-                .iter()
-                .take_while(|(k, _)| match bound {
-                    std::ops::Bound::Included(key) => k <= key,
-                    std::ops::Bound::Excluded(key) => k < key,
-                    std::ops::Bound::Unbounded => true,
-                })
-                .fold(RoaringBitmap::new(), |acc, (_, v)| acc | v),
+            Query::GreaterThan(bound) => Cow::Owned(
+                self.inner
+                    .iter()
+                    .rev()
+                    .take_while(|(k, _)| match bound {
+                        std::ops::Bound::Included(key) => k >= key,
+                        std::ops::Bound::Excluded(key) => k > key,
+                        std::ops::Bound::Unbounded => true,
+                    })
+                    .fold(RoaringBitmap::new(), |acc, (_, v)| acc | v),
+            ),
+            Query::LessThan(bound) => Cow::Owned(
+                self.inner
+                    .iter()
+                    .take_while(|(k, _)| match bound {
+                        std::ops::Bound::Included(key) => k <= key,
+                        std::ops::Bound::Excluded(key) => k < key,
+                        std::ops::Bound::Unbounded => true,
+                    })
+                    .fold(RoaringBitmap::new(), |acc, (_, v)| acc | v),
+            ),
             Query::Range { start, end } => self.query(&Query::And(vec![
                 Query::GreaterThan(start.clone()),
                 Query::LessThan(end.clone()),
@@ -93,6 +100,7 @@ impl Facet for Simple {
 
 #[cfg(test)]
 mod test {
+    use std::borrow::Cow;
     use std::ops::Bound;
 
     use facets::facet::Facet;
@@ -544,50 +552,50 @@ mod test {
             // Excluded x Excluded
             let greater_than_ret = f.query(&Query::GreaterThan(Bound::Excluded(greater_than.into())));
             let less_than_ret = f.query(&Query::LessThan(Bound::Excluded(less_than.into())));
-            let expected_range = greater_than_ret & less_than_ret;
+            let expected_range = greater_than_ret.as_ref() & less_than_ret.as_ref();
 
             let range_ret = f.query(&Query::Range {
                 start: Bound::Excluded(greater_than.into()),
                 end: Bound::Excluded(less_than.into()),
             });
 
-            prop_assert_eq!(expected_range, range_ret);
+            prop_assert_eq!(Cow::Borrowed(&expected_range), range_ret);
 
             // Included x Excluded
             let greater_than_ret = f.query(&Query::GreaterThan(Bound::Included(greater_than.into())));
             let less_than_ret = f.query(&Query::LessThan(Bound::Excluded(less_than.into())));
-            let expected_range = greater_than_ret & less_than_ret;
+            let expected_range = greater_than_ret.as_ref() & less_than_ret.as_ref();
 
             let range_ret = f.query(&Query::Range {
                 start: Bound::Included(greater_than.into()),
                 end: Bound::Excluded(less_than.into()),
             });
 
-            prop_assert_eq!(expected_range, range_ret);
+            prop_assert_eq!(Cow::Borrowed(&expected_range), range_ret);
 
             // Excluded x Included
             let greater_than_ret = f.query(&Query::GreaterThan(Bound::Excluded(greater_than.into())));
             let less_than_ret = f.query(&Query::LessThan(Bound::Included(less_than.into())));
-            let expected_range = greater_than_ret & less_than_ret;
+            let expected_range = greater_than_ret.as_ref() & less_than_ret.as_ref();
 
             let range_ret = f.query(&Query::Range {
                 start: Bound::Excluded(greater_than.into()),
                 end: Bound::Included(less_than.into()),
             });
 
-            prop_assert_eq!(expected_range, range_ret);
+            prop_assert_eq!(Cow::Borrowed(&expected_range), range_ret);
 
             // Included x Included
             let greater_than_ret = f.query(&Query::GreaterThan(Bound::Included(greater_than.into())));
             let less_than_ret = f.query(&Query::LessThan(Bound::Included(less_than.into())));
-            let expected_range = greater_than_ret & less_than_ret;
+            let expected_range = greater_than_ret.as_ref() & less_than_ret.as_ref();
 
             let range_ret = f.query(&Query::Range {
                 start: Bound::Included(greater_than.into()),
                 end: Bound::Included(less_than.into()),
             });
 
-            prop_assert_eq!(expected_range, range_ret);
+            prop_assert_eq!(Cow::Borrowed(&expected_range), range_ret);
 
         }
 
