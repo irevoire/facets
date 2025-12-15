@@ -1200,7 +1200,6 @@ mod test {
         };
 
         BTree {
-            must_be_built: false,
             order: 3,
             root_idx: NodeId::craft(0),
             arena: Arena::craft_from(vec![
@@ -1292,7 +1291,6 @@ mod test {
     fn ascii_test_display() {
         let f = craft_simple_facet();
         insta::assert_snapshot!(f.ascii_draw(2, |key| usize::from_be_bytes(key.bytes.clone().try_into().unwrap()).to_string()), @r"
-
                         [35]    
                 [22]    [45]    
         [12|20] [24|25] [41]    [65]

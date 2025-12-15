@@ -1,5 +1,3 @@
-use std::fmt;
-
 use facets::{
     arena::{Arena, ArenaId},
     facet::Facet,
